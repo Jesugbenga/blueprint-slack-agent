@@ -1,4 +1,5 @@
 import { DurableAgent } from "@workflow/ai/agent";
+import { google } from "@workflow/ai/google";
 import type { SlackAgentContextInput } from "./context";
 import { slackTools } from "./tools";
 
@@ -23,7 +24,7 @@ export const createSlackAgent = (
     : `2. Ask the user if they'd like to switch to a channel for more context`;
 
   return new DurableAgent({
-    model: "google/gemini-2.5-flash",
+    model: google("gemini-2.5-flash"),
     system: `
 You are Blueprint, a friendly and professional AI context agent for engineering teams in Slack.
 Always gather context from Slack before asking the user for clarification.
