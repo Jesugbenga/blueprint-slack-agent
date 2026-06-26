@@ -1,6 +1,11 @@
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { classifyMessage } from "../../lib/classifier";
-import { storeDecision, storeBlocker, recordDiscussion } from "../../lib/graph";
+import {
+  getKnownTopics,
+  recordDiscussion,
+  storeBlocker,
+  storeDecision,
+} from "../../lib/graph";
 
 type MessageArgs = SlackEventMiddlewareArgs<"message"> & AllMiddlewareArgs;
 
@@ -26,8 +31,9 @@ export async function messageClassifier({ event, client }: MessageArgs) {
   const threadTs =
     "thread_ts" in event && event.thread_ts ? event.thread_ts : event.ts;
 
-  // Classify the message
-  const classified = await classifyMessage(event.text);
+  // Classify the message, reusing existing topic labels to avoid graph fragmentation
+  const knownTopics = await getKnownTopics().catch(() => []);
+  const classified = await classifyMessage(event.text, knownTopics);
 
   // Nothing interesting — skip
   if (classified.type === "none" || !classified.topic || !classified.summary) {

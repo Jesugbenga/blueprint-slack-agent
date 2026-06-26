@@ -4,7 +4,7 @@ import type { SlackAgentContextInput } from "./context";
 import { slackTools } from "./tools";
 
 export const createSlackAgent = (
-  context: SlackAgentContextInput
+  context: SlackAgentContextInput,
 ): DurableAgent => {
   const { channel_id, dm_channel, thread_ts, is_dm, team_id } = context;
 
@@ -60,6 +60,14 @@ ${joinChannelsSection}
 - Suggest next steps if needed; avoid unnecessary clarifying questions.
 - Slack markdown doesn't support language tags in code blocks.
 - Tag users with <@user_id> syntax, never just show the ID.
+
+### 5. Consulting Team Memory
+Blueprint maintains a living memory of the team's decisions, blockers, and who owns what.
+- For "what did we decide about X", "why did we choose X" → queryDecisions first.
+- For "what's risky / blocked about X" → queryBlockers.
+- For "who knows / who owns X", "who should I ask about X" → whoKnows, then tag them with <@user_id>.
+- For broad recall across the whole workspace ("has anyone discussed X", "find the thread about Y"), or when the structured tools return nothing → searchHistory.
+- Always cite sources using Slack links: <permalink|original thread> so people can jump to the source.
 
 ## Decision Flow
 

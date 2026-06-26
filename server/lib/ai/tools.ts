@@ -10,7 +10,7 @@ const getChannelMessages = tool({
     channel_id: z
       .string()
       .describe(
-        "The Slack channel ID to fetch messages from (e.g., C0A2NKEHLLV)"
+        "The Slack channel ID to fetch messages from (e.g., C0A2NKEHLLV)",
       ),
   }),
   execute: async ({ channel_id }, { experimental_context }) => {
@@ -90,7 +90,7 @@ const getThreadMessages = tool({
 async function sendApprovalRequest(
   ctx: SlackAgentContextInput,
   channelId: string,
-  toolCallId: string
+  toolCallId: string,
 ): Promise<
   | { success: true; channelName?: string }
   | { success: false; message: string; isPrivate?: boolean }
@@ -145,7 +145,7 @@ async function sendApprovalRequest(
 // Helper step function to actually join the channel
 async function performChannelJoin(
   ctx: SlackAgentContextInput,
-  channelId: string
+  channelId: string,
 ): Promise<{
   success: boolean;
   message: string;
@@ -201,7 +201,7 @@ const joinChannel = tool({
       const approvalResult = await sendApprovalRequest(
         ctx,
         channel_id,
-        toolCallId
+        toolCallId,
       );
 
       if (!approvalResult.success) {
@@ -240,7 +240,7 @@ const searchChannels = tool({
     query: z
       .string()
       .describe(
-        "The search query to find channels (e.g., 'marketing', 'engineering', 'announcements')"
+        "The search query to find channels (e.g., 'marketing', 'engineering', 'announcements')",
       ),
     team_id: z.string().describe("The workspace team ID to search channels in"),
   }),
@@ -277,8 +277,8 @@ const searchChannels = tool({
         if (result.channels) {
           allChannels.push(
             ...result.channels.filter(
-              (ch): ch is (typeof allChannels)[number] => !!ch.id && !!ch.name
-            )
+              (ch): ch is (typeof allChannels)[number] => !!ch.id && !!ch.name,
+            ),
           );
         }
 
@@ -341,9 +341,173 @@ const searchChannels = tool({
   },
 });
 
+const queryDecisions = tool({
+  description:
+    "Look up decisions the team has already made about a topic from Blueprint's long-term memory. Use this to answer 'why did we...', 'what did we decide about...', or 'did we already choose...' questions. Returns each decision with who made it and a Slack permalink to the original thread so you can cite your sources.",
+  inputSchema: z.object({
+    topic: z
+      .string()
+      .describe(
+        "The topic to look up, e.g. 'auth_service', 'checkout flow', 'database migration'. Free text is fine; it is normalized automatically.",
+      ),
+  }),
+  execute: async ({ topic }) => {
+    "use step";
+    const { queryDecisions: query } = await import("~/lib/graph");
+    const { slackPermalink } = await import("~/lib/slack/utils");
+    try {
+      const decisions = await query(topic);
+      return {
+        success: true,
+        count: decisions.length,
+        decisions: decisions.map((d) => ({
+          summary: d.summary,
+          decidedBy: d.personName,
+          decidedById: d.personId,
+          date: d.date,
+          source: slackPermalink(d.channel, d.threadTs),
+        })),
+      };
+    } catch (error) {
+      console.error("Failed to query decisions:", error);
+      return {
+        success: false,
+        message: "Failed to query decisions from memory",
+        error: error instanceof Error ? error.message : "Unknown error",
+        decisions: [],
+      };
+    }
+  },
+});
+
+const queryBlockers = tool({
+  description:
+    "Look up blockers and concerns the team has raised about a topic from Blueprint's long-term memory. Use this to answer 'what's blocking...', 'what concerns were raised about...', or 'why didn't we...' questions. Returns each blocker with who raised it and a Slack permalink to the original thread.",
+  inputSchema: z.object({
+    topic: z
+      .string()
+      .describe(
+        "The topic to look up, e.g. 'auth_service', 'checkout flow'. Free text is fine; it is normalized automatically.",
+      ),
+  }),
+  execute: async ({ topic }) => {
+    "use step";
+    const { queryBlockers: query } = await import("~/lib/graph");
+    const { slackPermalink } = await import("~/lib/slack/utils");
+    try {
+      const blockers = await query(topic);
+      return {
+        success: true,
+        count: blockers.length,
+        blockers: blockers.map((b) => ({
+          summary: b.summary,
+          raisedBy: b.personName,
+          raisedById: b.personId,
+          date: b.date,
+          source: slackPermalink(b.channel, b.threadTs),
+        })),
+      };
+    } catch (error) {
+      console.error("Failed to query blockers:", error);
+      return {
+        success: false,
+        message: "Failed to query blockers from memory",
+        error: error instanceof Error ? error.message : "Unknown error",
+        blockers: [],
+      };
+    }
+  },
+});
+
+const whoKnows = tool({
+  description:
+    "Find out who on the team has the most context on a topic, based on how often they've discussed it. Use this to answer 'who knows about...', 'who should I ask about...', or 'who owns...' questions. Returns people ranked by involvement so you can tag them with <@user_id>.",
+  inputSchema: z.object({
+    topic: z
+      .string()
+      .describe(
+        "The topic to look up, e.g. 'auth_service', 'checkout flow'. Free text is fine; it is normalized automatically.",
+      ),
+  }),
+  execute: async ({ topic }) => {
+    "use step";
+    const { whoKnows: query } = await import("~/lib/graph");
+    try {
+      const experts = await query(topic);
+      return {
+        success: true,
+        count: experts.length,
+        experts: experts.map((e) => ({
+          name: e.personName,
+          userId: e.personId,
+          timesDiscussed: e.count,
+        })),
+      };
+    } catch (error) {
+      console.error("Failed to query experts:", error);
+      return {
+        success: false,
+        message: "Failed to query experts from memory",
+        error: error instanceof Error ? error.message : "Unknown error",
+        experts: [],
+      };
+    }
+  },
+});
+
+const searchHistory = tool({
+  description:
+    "Search the team's entire Slack history (including channels you aren't a member of) for messages matching a query. Use this for broad recall like 'has anyone discussed X', 'where did we talk about Y', or to find the original thread behind a decision. Returns messages with permalinks you can cite as <permalink|source>. Prefer queryDecisions/queryBlockers/whoKnows first for structured memory; use this when those return nothing or for raw message lookup.",
+  inputSchema: z.object({
+    query: z
+      .string()
+      .describe(
+        "Search text. Slack search operators work too, e.g. 'in:#eng auth', 'from:@alice', 'rate limit'.",
+      ),
+  }),
+  execute: async ({ query }) => {
+    "use step";
+    const userToken = process.env.SLACK_USER_TOKEN;
+    if (!userToken) {
+      return {
+        success: false,
+        message:
+          "Full-history search is unavailable — SLACK_USER_TOKEN is not configured.",
+        results: [],
+      };
+    }
+    const { searchSlack } = await import("~/lib/slack/search");
+    try {
+      const results = await searchSlack(query, userToken);
+      return {
+        success: true,
+        count: results.length,
+        results: results.map((r) => ({
+          text: r.text,
+          author: r.username,
+          channel: r.channelName,
+          permalink: r.permalink,
+        })),
+      };
+    } catch (error) {
+      console.error("Failed to search Slack history:", error);
+      return {
+        success: false,
+        message: "Failed to search Slack history",
+        error: error instanceof Error ? error.message : "Unknown error",
+        results: [],
+      };
+    }
+  },
+});
+
 export const slackTools = {
   getChannelMessages,
   getThreadMessages,
   joinChannel,
   searchChannels,
+  queryDecisions,
+  queryBlockers,
+  whoKnows,
+  searchHistory,
 };

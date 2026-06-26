@@ -12,6 +12,19 @@ const formatLoadingMessages = (loadingMessages: string[]): string[] => {
   return loadingMessages.slice(0, 10);
 };
 
+/**
+ * Build a Slack permalink to a specific message from its channel ID and ts.
+ * The generic slack.com/archives URL redirects to the correct workspace.
+ * Returns null when the inputs are missing.
+ */
+export const slackPermalink = (
+  channel?: string | null,
+  ts?: string | null,
+): string | null => {
+  if (!channel || !ts) return null;
+  return `https://slack.com/archives/${channel}/p${ts.replace(".", "")}`;
+};
+
 export const updateAgentStatus = async ({
   client,
   channel_id,

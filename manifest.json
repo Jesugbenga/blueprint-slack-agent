@@ -56,7 +56,8 @@
                 "reactions:write",
                 "channels:join",
                 "users:read",
-                "users:read.email"
+                "users:read.email",
+                "files:write"
             ],
            "user": [
                 "search:read",
