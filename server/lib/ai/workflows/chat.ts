@@ -15,6 +15,9 @@ export async function chatWorkflow(
   await agent.stream({
     messages,
     writable,
+    // Cap the tool-calling loop so a single query can't spiral into many
+    // sequential model calls (a common cause of Gemini 429 rate limits).
+    maxSteps: 3,
     // Pass context to tools via experimental_context (client created inside steps)
     experimental_context: context,
   });

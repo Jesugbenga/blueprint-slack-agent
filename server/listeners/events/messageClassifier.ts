@@ -9,11 +9,29 @@ import {
 
 type MessageArgs = SlackEventMiddlewareArgs<"message"> & AllMiddlewareArgs;
 
-export async function messageClassifier({ event, client }: MessageArgs) {
+export async function messageClassifier({
+  event,
+  client,
+  context,
+}: MessageArgs) {
+  // Slack re-delivers an event (up to 3x) if we don't ack within ~3s. Skip
+  // those retries so we don't classify the same message multiple times.
+  if (context.retryNum) return;
+
   // Ignore bot messages, edits, deletions, and empty messages
   if ("subtype" in event && event.subtype) return;
   if ("bot_id" in event && event.bot_id) return;
   if (!("text" in event) || !event.text?.trim()) return;
+
+  // Only classify real channel conversation. Direct messages and group DMs are
+  // assistant chats already handled by the agent — classifying them here would
+  // fire a second, redundant Gemini call per message (a major source of 429s).
+  if (
+    "channel_type" in event &&
+    (event.channel_type === "im" || event.channel_type === "mpim")
+  ) {
+    return;
+  }
 
   const userId = "user" in event ? event.user : null;
   if (!userId) return;

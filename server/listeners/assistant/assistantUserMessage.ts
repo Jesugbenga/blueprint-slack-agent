@@ -30,6 +30,10 @@ export const assistantUserMessage: AssistantUserMessageMiddleware = async ({
   ) {
     return;
   }
+  // Slack re-delivers an event (up to 3x) if we don't ack within ~3s. The
+  // agent run almost always exceeds that, so skip retries to avoid launching
+  // the agent multiple times for one message (a common cause of 429s).
+  if (context.retryNum) return;
   await setStatus("is thinking...");
   const { thread_ts, channel } = message;
   const { userId, botId, teamId } = context;

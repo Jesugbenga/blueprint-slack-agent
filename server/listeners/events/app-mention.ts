@@ -16,6 +16,12 @@ const appMentionCallback = async ({
   logger,
   context,
 }: AllMiddlewareArgs & SlackEventMiddlewareArgs<"app_mention">) => {
+  // Slack re-delivers an event (up to 3x) if we don't ack within ~3s. The
+  // agent run almost always takes longer than that, so without this guard a
+  // single mention would launch the agent 2-4 times and quickly hit Gemini
+  // rate limits. The first delivery already started the workflow.
+  if (context.retryNum) return;
+
   logger.debug(`app_mention event received: ${JSON.stringify(event)}`);
   const thread_ts = event.thread_ts || event.ts;
   const channel = event.channel;
