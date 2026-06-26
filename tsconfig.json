@@ -2,6 +2,12 @@
 {
   "extends": "./.nitro/types/tsconfig.json",
   "compilerOptions": {
+    "paths": {
+      "~/*": ["./server/*"],
+      "@/*": ["./server/*"],
+      "~~/*": ["./*"],
+      "@@/*": ["./*"]
+    },
     "plugins": [
       {
         "name": "workflow"
