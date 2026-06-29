@@ -52,6 +52,9 @@ export async function messageClassifier({
   // Classify the message, reusing existing topic labels to avoid graph fragmentation
   const knownTopics = await getKnownTopics().catch(() => []);
   const classified = await classifyMessage(event.text, knownTopics);
+  console.log(
+    `[Blueprint] classified type=${classified.type} topic=${classified.topic ?? "-"}`,
+  );
 
   // Nothing interesting — skip
   if (classified.type === "none" || !classified.topic || !classified.summary) {
