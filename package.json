@@ -19,15 +19,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/cerebras": "^3.0.1",
+    "@ai-sdk/cerebras": "^2.0.60",
     "@ai-sdk/google": "^3.0.83",
-    "@ai-sdk/groq": "^4.0.1",
-    "@ai-sdk/mistral": "^4.0.1",
+    "@ai-sdk/groq": "^3.0.45",
+    "@ai-sdk/mistral": "^3.0.43",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
     "@vercel/slack-bolt": "latest",
     "@workflow/ai": "4.1.0-beta.57",
-    "ai": "^6.0.27",
+    "ai": "^6",
     "neo4j-driver": "^6.1.0",
     "workflow": "4.2.0-beta.71",
     "zod": "^4.3.5"
