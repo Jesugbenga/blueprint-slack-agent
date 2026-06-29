@@ -1,6 +1,5 @@
-import { google } from "@ai-sdk/google";
-import { generateText } from "ai";
 import { normalizeTopic } from "./graph";
+import { generateBalanced } from "./ai/rotation";
 
 export type MessageType = "decision" | "blocker" | "question" | "none";
 
@@ -8,38 +7,6 @@ export interface ClassifiedMessage {
   type: MessageType;
   topic: string | null;
   summary: string | null;
-}
-
-// Tried in order. If one is rate-limited (429) or fails, fall back to the next.
-const CLASSIFIER_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-3.5-flash",
-  "gemini-2.5-flash-lite",
-  "gemini-2.5-pro",
-  "gemini-3.1-flash-lite",
-  "gemini-3-flash-preview",
-  "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
-];
-
-function isRateLimit(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return /429|rate.?limit|quota|resource.?exhausted/i.test(msg);
-}
-
-async function generateWithFallback(prompt: string): Promise<string> {
-  let lastErr: unknown;
-  for (const id of CLASSIFIER_MODELS) {
-    try {
-      const { text } = await generateText({ model: google(id), prompt });
-      return text;
-    } catch (err) {
-      lastErr = err;
-      if (!isRateLimit(err)) throw err; // only fall back on rate limits
-      console.warn(`[classifier] ${id} rate-limited, trying next model`);
-    }
-  }
-  throw lastErr;
 }
 
 export async function classifyMessage(
@@ -51,7 +18,7 @@ export async function classifyMessage(
       ? `\nExisting topics already in memory (REUSE the closest match if this message is about the same thing, instead of inventing a new label):\n${knownTopics.map((t) => `- ${t}`).join("\n")}\n`
       : "";
 
-  const response = await generateWithFallback(
+  const response = await generateBalanced(
     `Analyze this Slack message and return a JSON object with these exact fields:
 
 - "type": one of "decision", "blocker", "question", or "none"

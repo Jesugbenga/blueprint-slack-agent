@@ -19,7 +19,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/cerebras": "^3.0.1",
     "@ai-sdk/google": "^3.0.83",
+    "@ai-sdk/groq": "^4.0.1",
+    "@ai-sdk/mistral": "^4.0.1",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
     "@vercel/slack-bolt": "latest",
