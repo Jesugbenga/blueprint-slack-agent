@@ -13,7 +13,11 @@ export interface ClassifiedMessage {
 // Tried in order. If one is rate-limited (429) or fails, fall back to the next.
 const CLASSIFIER_MODELS = [
   "gemini-2.5-flash",
+  "gemini-3.5-flash",
   "gemini-2.5-flash-lite",
+  "gemini-2.5-pro",
+  "gemini-3.1-flash-lite",
+  "gemini-3-flash-preview",
   "gemini-2.0-flash",
   "gemini-2.0-flash-lite",
 ];
