@@ -1,7 +1,53 @@
 import { DurableAgent } from "@workflow/ai/agent";
+import type { CompatibleLanguageModel } from "@workflow/ai/agent";
 import { google } from "@workflow/ai/google";
+import { cerebras } from "@ai-sdk/cerebras";
+import { groq } from "@ai-sdk/groq";
+import { mistral } from "@ai-sdk/mistral";
 import type { SlackAgentContextInput } from "./context";
 import { slackTools } from "./tools";
+
+// Model factory the DurableAgent understands: a step that resolves a V3 model.
+type ModelFactory = () => Promise<CompatibleLanguageModel>;
+
+// Same capacity-first order as the classifier rotation. Each conversation picks
+// the next configured provider so new chats spread across providers, not just
+// Gemini. A provider is included only if its API key is set.
+const AGENT_MODELS: Array<{ env: string; make: () => ModelFactory }> = [
+  {
+    env: "MISTRAL_API_KEY",
+    make: () => async () => {
+      "use step";
+      return mistral("mistral-small-2506") as unknown as CompatibleLanguageModel;
+    },
+  },
+  {
+    env: "GROQ_API_KEY",
+    make: () => async () => {
+      "use step";
+      return groq("llama-3.1-8b-instant") as unknown as CompatibleLanguageModel;
+    },
+  },
+  { env: "GOOGLE_GENERATIVE_AI_API_KEY", make: () => google("gemini-2.5-flash") },
+  {
+    env: "CEREBRAS_API_KEY",
+    make: () => async () => {
+      "use step";
+      return cerebras("gpt-oss-120b") as unknown as CompatibleLanguageModel;
+    },
+  },
+];
+
+const activeAgentModels = AGENT_MODELS.filter((m) => process.env[m.env]);
+let agentCursor = 0;
+
+// Round-robin a model per conversation. Falls back to Gemini if nothing is set.
+function nextAgentModel(): ModelFactory {
+  if (activeAgentModels.length === 0) return google("gemini-2.5-flash");
+  const pick = activeAgentModels[agentCursor % activeAgentModels.length];
+  agentCursor = (agentCursor + 1) % activeAgentModels.length;
+  return pick.make();
+}
 
 export const createSlackAgent = (
   context: SlackAgentContextInput,
@@ -24,7 +70,7 @@ export const createSlackAgent = (
     : `2. Ask the user if they'd like to switch to a channel for more context`;
 
   return new DurableAgent({
-    model: google("gemini-2.5-flash"),
+    model: nextAgentModel(),
     system: `
 You are Blueprint, a friendly and professional AI context agent for engineering teams in Slack.
 Default to answering directly. Only fetch context from Slack when the message actually requires it.
