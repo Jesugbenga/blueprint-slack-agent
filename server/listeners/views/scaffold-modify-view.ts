@@ -37,12 +37,17 @@ const scaffoldModifyViewCallback = async ({
 
   const modText = view.state.values.modify_block?.modify_input?.value ?? "";
   const userId = body.user.id;
+  const teamId = body.team?.id;
+  if (!teamId) {
+    logger.error("Scaffold modify: missing team id");
+    return;
+  }
 
   // Regeneration takes longer than Slack's 3s ack window, so run it after ack.
   (async () => {
     const description = `${meta.description}\n\nRequested changes from reviewer: ${modText}`;
     const { project, groundingDecisions, groundingBlockers } =
-      await generateScaffold(description, meta.topic);
+      await generateScaffold(description, teamId, meta.topic);
 
     const grounded =
       groundingDecisions.length + groundingBlockers.length > 0

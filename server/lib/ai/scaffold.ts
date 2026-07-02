@@ -68,13 +68,14 @@ export interface ScaffoldResult {
  */
 export async function generateScaffold(
   description: string,
+  teamId: string,
   topicHint?: string,
 ): Promise<ScaffoldResult> {
   // Pull related prior context so the scaffold respects past decisions/blockers.
   const topic = topicHint?.trim() || description;
   const [groundingDecisions, groundingBlockers] = await Promise.all([
-    queryDecisions(topic).catch(() => [] as DecisionRecord[]),
-    queryBlockers(topic).catch(() => [] as BlockerRecord[]),
+    queryDecisions(topic, teamId).catch(() => [] as DecisionRecord[]),
+    queryBlockers(topic, teamId).catch(() => [] as BlockerRecord[]),
   ]);
 
   const priorContext =

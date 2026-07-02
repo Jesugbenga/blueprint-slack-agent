@@ -351,12 +351,13 @@ const queryDecisions = tool({
         "The topic to look up, e.g. 'auth_service', 'checkout flow', 'database migration'. Free text is fine; it is normalized automatically.",
       ),
   }),
-  execute: async ({ topic }) => {
+  execute: async ({ topic }, { experimental_context }) => {
     "use step";
     const { queryDecisions: query } = await import("~/lib/graph");
     const { slackPermalink } = await import("~/lib/slack/utils");
+    const ctx = experimental_context as SlackAgentContextInput;
     try {
-      const decisions = await query(topic);
+      const decisions = await query(topic, ctx.team_id);
       return {
         success: true,
         count: decisions.length,
@@ -390,12 +391,13 @@ const queryBlockers = tool({
         "The topic to look up, e.g. 'auth_service', 'checkout flow'. Free text is fine; it is normalized automatically.",
       ),
   }),
-  execute: async ({ topic }) => {
+  execute: async ({ topic }, { experimental_context }) => {
     "use step";
     const { queryBlockers: query } = await import("~/lib/graph");
     const { slackPermalink } = await import("~/lib/slack/utils");
+    const ctx = experimental_context as SlackAgentContextInput;
     try {
-      const blockers = await query(topic);
+      const blockers = await query(topic, ctx.team_id);
       return {
         success: true,
         count: blockers.length,
@@ -429,11 +431,12 @@ const whoKnows = tool({
         "The topic to look up, e.g. 'auth_service', 'checkout flow'. Free text is fine; it is normalized automatically.",
       ),
   }),
-  execute: async ({ topic }) => {
+  execute: async ({ topic }, { experimental_context }) => {
     "use step";
     const { whoKnows: query } = await import("~/lib/graph");
+    const ctx = experimental_context as SlackAgentContextInput;
     try {
-      const experts = await query(topic);
+      const experts = await query(topic, ctx.team_id);
       return {
         success: true,
         count: experts.length,
@@ -501,6 +504,80 @@ const searchHistory = tool({
   },
 });
 
+const scaffold = tool({
+  description:
+    "Generate a runnable prototype (database schema + API + supporting files) from a plain-English feature description, grounded in the team's past decisions and blockers. Posts an interactive review card (Approve / Modify / Reject) plus the code files into the conversation. Use this when the user asks to 'build', 'scaffold', 'prototype', 'mock up', or 'generate code for' a feature.",
+  inputSchema: z.object({
+    description: z
+      .string()
+      .describe(
+        "The feature to prototype, in plain English, e.g. 'a webhook endpoint that syncs Stripe payments to our orders table'.",
+      ),
+    topic: z
+      .string()
+      .optional()
+      .describe(
+        "Optional short topic label to ground the scaffold in related memory, e.g. 'checkout_flow', 'auth_service'. Free text is fine.",
+      ),
+  }),
+  execute: async ({ description, topic }, { experimental_context }) => {
+    "use step";
+    const ctx = experimental_context as SlackAgentContextInput;
+    const { randomUUID } = await import("node:crypto");
+    const { WebClient } = await import("@slack/web-api");
+    const { generateScaffold } = await import("~/lib/ai/scaffold");
+    const { deliverScaffold } = await import("~/lib/slack/scaffold-message");
+    try {
+      const { project, groundingDecisions, groundingBlockers } =
+        await generateScaffold(description, ctx.team_id, topic);
+
+      const grounded =
+        groundingDecisions.length + groundingBlockers.length > 0
+          ? `\n\n_Grounded in ${groundingDecisions.length} prior decision(s) and ${groundingBlockers.length} known blocker(s) from team memory._`
+          : "";
+
+      const client = new WebClient(ctx.token);
+      const channelId = ctx.dm_channel;
+      // Keep the card in the same thread the user is talking in.
+      const post = async (m: { text: string; blocks?: unknown[] }) =>
+        client.chat.postMessage({
+          channel: channelId,
+          thread_ts: ctx.thread_ts,
+          text: m.text,
+          // biome-ignore lint/suspicious/noExplicitAny: Slack block typing crosses the dynamic-import boundary
+          blocks: m.blocks as any,
+        });
+
+      await deliverScaffold({
+        project,
+        scaffoldId: randomUUID(),
+        topic: topic ?? description,
+        description,
+        groundedNote: grounded,
+        post,
+        client,
+        channelId,
+      });
+
+      return {
+        success: true,
+        summary: project.summary,
+        stack: project.stack,
+        fileCount: project.files.length,
+        message:
+          "Posted a prototype review card (Approve / Modify / Reject) with the generated files into the thread.",
+      };
+    } catch (error) {
+      console.error("Failed to generate scaffold:", error);
+      return {
+        success: false,
+        message: "Failed to generate the prototype",
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  },
+});
+
 export const slackTools = {
   getChannelMessages,
   getThreadMessages,
@@ -510,4 +587,5 @@ export const slackTools = {
   queryBlockers,
   whoKnows,
   searchHistory,
+  scaffold,
 };

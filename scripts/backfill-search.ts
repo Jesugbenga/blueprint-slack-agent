@@ -33,6 +33,17 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Backfill runs against a single workspace; resolve its team id so every
+  // record is written under the correct tenant scope.
+  const { WebClient } = await import("@slack/web-api");
+  const auth = await new WebClient(userToken).auth.test();
+  const teamId = auth.team_id;
+  if (!teamId) {
+    console.error("✗ Could not resolve team_id from SLACK_USER_TOKEN.");
+    process.exitCode = 1;
+    return;
+  }
+
   let stored = 0;
   let skipped = 0;
 
@@ -47,7 +58,7 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const knownTopics = await getKnownTopics().catch(() => [] as string[]);
+      const knownTopics = await getKnownTopics(teamId).catch(() => [] as string[]);
       const result = await classifyMessage(m.text, knownTopics);
 
       if (result.type === "none" || !result.topic || !result.summary) {
@@ -59,7 +70,7 @@ async function main(): Promise<void> {
       const channel = m.channelId ?? "";
       const threadTs = m.ts ?? "";
 
-      await recordDiscussion(m.userId, personName, result.topic);
+      await recordDiscussion(m.userId, personName, result.topic, teamId);
 
       if (result.type === "decision") {
         await storeDecision({
@@ -69,6 +80,7 @@ async function main(): Promise<void> {
           summary: result.summary,
           channel,
           threadTs,
+          teamId,
         });
         stored++;
         console.log(`   ✓ decision [${result.topic}] ${result.summary}`);
@@ -80,6 +92,7 @@ async function main(): Promise<void> {
           summary: result.summary,
           channel,
           threadTs,
+          teamId,
         });
         stored++;
         console.log(`   ✓ blocker  [${result.topic}] ${result.summary}`);

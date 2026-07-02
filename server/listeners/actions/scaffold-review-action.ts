@@ -40,6 +40,7 @@ export const scaffoldReviewCallback = async ({
   const userName = body.user.username || body.user.name || userId;
   const channelId = body.channel?.id;
   const messageTs = body.message?.ts;
+  const teamId = body.team?.id;
 
   if (actionId === SCAFFOLD_MODIFY_ACTION) {
     await client.views.open({
@@ -102,7 +103,7 @@ export const scaffoldReviewCallback = async ({
     });
   }
 
-  if (approved) {
+  if (approved && teamId) {
     // Record the approval as a decision so it shows up in team memory.
     storeDecision({
       personId: userId,
@@ -111,6 +112,7 @@ export const scaffoldReviewCallback = async ({
       summary: `Approved prototype: ${value.summary}`,
       channel: channelId ?? "",
       threadTs: messageTs ?? "",
+      teamId,
     }).catch((err) => logger.error("Failed to record scaffold approval:", err));
   }
 };

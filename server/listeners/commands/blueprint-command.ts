@@ -15,6 +15,7 @@ type RespondFn = SlackCommandMiddlewareArgs["respond"];
 interface CommandCtx {
   respond: RespondFn;
   client: WebClient;
+  teamId: string;
   channelId?: string;
   userId?: string;
 }
@@ -62,7 +63,7 @@ function citation(channel?: string | null, ts?: string | null): string {
   return link ? ` (<${link}|source>)` : "";
 }
 
-async function handleContext(arg: string, respond: RespondFn) {
+async function handleContext(arg: string, teamId: string, respond: RespondFn) {
   if (!arg) {
     await respond({
       response_type: "ephemeral",
@@ -70,7 +71,7 @@ async function handleContext(arg: string, respond: RespondFn) {
     });
     return;
   }
-  const decisions = await queryDecisions(arg);
+  const decisions = await queryDecisions(arg, teamId);
   if (decisions.length === 0) {
     await respond({
       response_type: "ephemeral",
@@ -88,7 +89,7 @@ async function handleContext(arg: string, respond: RespondFn) {
   });
 }
 
-async function handleRisks(arg: string, respond: RespondFn) {
+async function handleRisks(arg: string, teamId: string, respond: RespondFn) {
   if (!arg) {
     await respond({
       response_type: "ephemeral",
@@ -96,7 +97,7 @@ async function handleRisks(arg: string, respond: RespondFn) {
     });
     return;
   }
-  const blockers = await queryBlockers(arg);
+  const blockers = await queryBlockers(arg, teamId);
   if (blockers.length === 0) {
     await respond({
       response_type: "ephemeral",
@@ -114,7 +115,7 @@ async function handleRisks(arg: string, respond: RespondFn) {
   });
 }
 
-async function handleWhoKnows(arg: string, respond: RespondFn) {
+async function handleWhoKnows(arg: string, teamId: string, respond: RespondFn) {
   if (!arg) {
     await respond({
       response_type: "ephemeral",
@@ -122,7 +123,7 @@ async function handleWhoKnows(arg: string, respond: RespondFn) {
     });
     return;
   }
-  const experts = await whoKnows(arg);
+  const experts = await whoKnows(arg, teamId);
   if (experts.length === 0) {
     await respond({
       response_type: "ephemeral",
@@ -149,7 +150,7 @@ async function handleScaffold(arg: string, ctx: CommandCtx) {
   }
 
   const { project, groundingDecisions, groundingBlockers } =
-    await generateScaffold(arg);
+    await generateScaffold(arg, ctx.teamId);
 
   const grounded =
     groundingDecisions.length + groundingBlockers.length > 0
@@ -181,11 +182,11 @@ export async function runBlueprintCommand(text: string, ctx: CommandCtx) {
   const { sub, arg } = parseBlueprintCommand(text);
   switch (sub) {
     case "context":
-      return handleContext(arg, ctx.respond);
+      return handleContext(arg, ctx.teamId, ctx.respond);
     case "risks":
-      return handleRisks(arg, ctx.respond);
+      return handleRisks(arg, ctx.teamId, ctx.respond);
     case "who-knows":
-      return handleWhoKnows(arg, ctx.respond);
+      return handleWhoKnows(arg, ctx.teamId, ctx.respond);
     case "scaffold":
       return handleScaffold(arg, ctx);
     default:
@@ -207,6 +208,7 @@ export const blueprintCommandCallback = async ({
   const ctx: CommandCtx = {
     respond,
     client,
+    teamId: command.team_id,
     channelId: command.channel_id,
     userId: command.user_id,
   };

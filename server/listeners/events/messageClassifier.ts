@@ -36,6 +36,11 @@ export async function messageClassifier({
   const userId = "user" in event ? event.user : null;
   if (!userId) return;
 
+  // Tenant scope: every graph write is keyed to the workspace that sent the
+  // event, so one team can never read or mutate another team's memory.
+  const teamId = context.teamId;
+  if (!teamId) return;
+
   // Fetch the real name from Slack — non-fatal if it fails
   let userName = "Unknown";
   try {
@@ -50,7 +55,7 @@ export async function messageClassifier({
     "thread_ts" in event && event.thread_ts ? event.thread_ts : event.ts;
 
   // Classify the message, reusing existing topic labels to avoid graph fragmentation
-  const knownTopics = await getKnownTopics().catch(() => []);
+  const knownTopics = await getKnownTopics(teamId).catch(() => []);
   const classified = await classifyMessage(event.text, knownTopics);
   console.log(
     `[Blueprint] classified type=${classified.type} topic=${classified.topic ?? "-"}`,
@@ -62,7 +67,7 @@ export async function messageClassifier({
   }
 
   // Always record topic discussion — this builds the expertise graph over time
-  await recordDiscussion(userId, userName, classified.topic);
+  await recordDiscussion(userId, userName, classified.topic, teamId);
 
   // Store structured data based on classification
   if (classified.type === "decision") {
@@ -73,6 +78,7 @@ export async function messageClassifier({
       summary: classified.summary,
       channel,
       threadTs,
+      teamId,
     });
     console.log(`[Blueprint] Decision stored — topic: ${classified.topic}`);
   } else if (classified.type === "blocker") {
@@ -83,6 +89,7 @@ export async function messageClassifier({
       summary: classified.summary,
       channel,
       threadTs,
+      teamId,
     });
     console.log(`[Blueprint] Blocker stored — topic: ${classified.topic}`);
   }
