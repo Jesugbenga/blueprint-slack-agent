@@ -103,24 +103,47 @@ export function newComponentId(): string {
   return `c${Date.now().toString(36)}${componentCounter}`;
 }
 
+export interface EnrichmentResult {
+  decisions: DecisionRecord[];
+  experts: ExpertRecord[];
+  enrichment: DesignEnrichment;
+}
+
 /**
- * Turn a PM's natural-language feature request into a UI component spec,
- * grounded in the team's past decisions and expertise.
+ * Fast step: pull related decisions + experts from team memory. Runs first so
+ * the thread gets immediate feedback before the slower model call.
  */
-export async function generateDesign(
-  description: string,
+export async function enrichForDesign(
+  seed: string,
   teamId: string,
-  topicHint?: string,
-): Promise<DesignResult> {
-  const seed = topicHint?.trim() || description;
-  const [groundingDecisions, experts] = await Promise.all([
+): Promise<EnrichmentResult> {
+  const [decisions, experts] = await Promise.all([
     queryDecisions(seed, teamId).catch(() => [] as DecisionRecord[]),
     whoKnows(seed, teamId).catch(() => [] as ExpertRecord[]),
   ]);
+  return {
+    decisions,
+    experts,
+    enrichment: {
+      decisions: decisions.map((d) => d.summary),
+      experts: experts.map((e) => ({ id: e.personId, name: e.personName })),
+    },
+  };
+}
 
+/**
+ * Slow step: turn the request into a UI component spec, grounded in the
+ * already-fetched decisions. Kept separate so callers can post enrichment
+ * feedback before paying for the model call.
+ */
+export async function generateDesignSpec(
+  description: string,
+  decisions: DecisionRecord[],
+  topicHint?: string,
+): Promise<{ title: string; topic: string; spec: UISpec }> {
   const priorContext =
-    groundingDecisions.length > 0
-      ? `\n\nRelevant past decisions you should respect in the design:\n${groundingDecisions
+    decisions.length > 0
+      ? `\n\nRelevant past decisions you should respect in the design:\n${decisions
           .map((d) => `- ${d.summary}`)
           .join("\n")}`
       : "\n\nNo prior decisions were found for this area; use sensible defaults.";
@@ -158,17 +181,38 @@ Rules:
     id: newComponentId(),
   }));
 
-  const enrichment: DesignEnrichment = {
-    decisions: groundingDecisions.map((d) => d.summary),
-    experts: experts.map((e) => ({ id: e.personId, name: e.personName })),
-  };
-
   return {
     title: object.title,
-    topic: normalizeTopic(object.topic || seed),
+    topic: normalizeTopic(object.topic || topicHint || description),
+    spec,
+  };
+}
+
+/**
+ * Convenience composition of enrichment + spec generation. Used by tests and
+ * any caller that doesn't need to stream intermediate feedback.
+ */
+export async function generateDesign(
+  description: string,
+  teamId: string,
+  topicHint?: string,
+): Promise<DesignResult> {
+  const seed = topicHint?.trim() || description;
+  const { decisions, experts, enrichment } = await enrichForDesign(
+    seed,
+    teamId,
+  );
+  const { title, topic, spec } = await generateDesignSpec(
+    description,
+    decisions,
+    seed,
+  );
+  return {
+    title,
+    topic,
     spec,
     enrichment,
-    groundingDecisions,
+    groundingDecisions: decisions,
     experts,
   };
 }

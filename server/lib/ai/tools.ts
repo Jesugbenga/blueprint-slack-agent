@@ -599,27 +599,34 @@ const designUI = tool({
     const ctx = experimental_context as SlackAgentContextInput;
     const { randomUUID } = await import("node:crypto");
     const { WebClient } = await import("@slack/web-api");
-    const { generateDesign } = await import("~/lib/ai/design");
+    const { enrichForDesign, generateDesignSpec } = await import(
+      "~/lib/ai/design"
+    );
     const { renderDesignBlocks } = await import("~/lib/slack/design-blocks");
     const { saveDesign, recordDesignEdit } = await import("~/lib/graph");
     try {
-      const design = await generateDesign(description, ctx.team_id, topic);
       const designId = randomUUID();
       const authorId = ctx.user_id ?? "unknown";
       const client = new WebClient(ctx.token);
       const channel = ctx.dm_channel;
+      const seed = topic?.trim() || description;
 
-      // Step 1 — post the enriched context summary.
+      // Step 1 (fast) — enrich from team memory and post it immediately so the
+      // thread shows progress before the slower model call.
+      const { decisions, experts, enrichment } = await enrichForDesign(
+        seed,
+        ctx.team_id,
+      );
       const expertLine =
-        design.experts.length > 0
-          ? design.experts
+        experts.length > 0
+          ? experts
               .slice(0, 3)
               .map((e) => `<@${e.personId}>`)
               .join(", ")
           : "none on record yet";
       const decisionLine =
-        design.groundingDecisions.length > 0
-          ? design.groundingDecisions
+        decisions.length > 0
+          ? decisions
               .slice(0, 3)
               .map((d) => `• ${d.summary}`)
               .join("\n")
@@ -627,7 +634,7 @@ const designUI = tool({
       await client.chat.postMessage({
         channel,
         thread_ts: ctx.thread_ts,
-        text: `Designing: ${design.title}`,
+        text: `Designing: ${description}`,
         blocks: [
           {
             type: "section",
@@ -639,18 +646,32 @@ const designUI = tool({
         ],
       });
 
-      // Persist the initial design state before rendering.
+      // Post a placeholder we'll replace with the finished design, so the user
+      // sees immediate feedback even while the model is working.
+      const placeholder = await client.chat.postMessage({
+        channel,
+        thread_ts: ctx.thread_ts,
+        text: "🎨 Generating the UI design…",
+      });
+
+      // Step 2 (slower) — generate the component spec.
+      const { title, topic: designTopic, spec } = await generateDesignSpec(
+        description,
+        decisions,
+        seed,
+      );
+
       await saveDesign({
         designId,
         teamId: ctx.team_id,
         channel,
         threadTs: ctx.thread_ts,
-        title: design.title,
-        topic: design.topic,
+        title,
+        topic: designTopic,
         description,
         status: "draft",
-        spec: JSON.stringify(design.spec),
-        enrichment: JSON.stringify(design.enrichment),
+        spec: JSON.stringify(spec),
+        enrichment: JSON.stringify(enrichment),
         authorId,
         authorName: "PM",
       });
@@ -658,33 +679,46 @@ const designUI = tool({
         designId,
         teamId: ctx.team_id,
         action: "create",
-        detail: `Created design "${design.title}" from: ${description}`,
+        detail: `Created design "${title}" from: ${description}`,
         byId: authorId,
         byName: "PM",
       });
 
-      // Step 2 — post the interactive Block Kit design.
-      await client.chat.postMessage({
-        channel,
-        thread_ts: ctx.thread_ts,
-        text: `Design: ${design.title}`,
-        blocks: renderDesignBlocks({
-          designId,
-          title: design.title,
-          spec: design.spec,
-          status: "draft",
-          enrichment: design.enrichment,
-        }),
-        metadata: {
-          event_type: "blueprint_design",
-          event_payload: { designId },
-        },
+      // Replace the placeholder with the interactive Block Kit design.
+      const blocks = renderDesignBlocks({
+        designId,
+        title,
+        spec,
+        status: "draft",
+        enrichment,
       });
+      const target = placeholder.ts
+        ? client.chat.update({
+            channel,
+            ts: placeholder.ts,
+            text: `Design: ${title}`,
+            blocks,
+            metadata: {
+              event_type: "blueprint_design",
+              event_payload: { designId },
+            },
+          })
+        : client.chat.postMessage({
+            channel,
+            thread_ts: ctx.thread_ts,
+            text: `Design: ${title}`,
+            blocks,
+            metadata: {
+              event_type: "blueprint_design",
+              event_payload: { designId },
+            },
+          });
+      await target;
 
       return {
         success: true,
-        title: design.title,
-        componentCount: design.spec.length,
+        title,
+        componentCount: spec.length,
         message:
           "Posted an enriched context summary and an interactive Block Kit design. The team can edit, add, remove components, and approve it in the thread.",
       };
