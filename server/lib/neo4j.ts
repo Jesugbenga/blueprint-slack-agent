@@ -30,8 +30,19 @@ export function getDriver(): Driver {
     driver = neo4j.driver(
       URI as string,
       neo4j.auth.basic(USER as string, PASSWORD as string),
-      // Return Neo4j integers as native JS numbers so counts/dates are easy to use.
-      { disableLosslessIntegers: true },
+      {
+        // Return Neo4j integers as native JS numbers so counts/dates are easy to use.
+        disableLosslessIntegers: true,
+        // Serverless tuning: Vercel freezes the function between invocations, so
+        // pooled TCP sockets to Aura go stale. Always liveness-check a pooled
+        // connection before reuse (0 = check every time), recycle connections
+        // aggressively, and fail fast instead of hanging for the 60s default.
+        connectionLivenessCheckTimeout: 0,
+        maxConnectionLifetime: 60 * 1000,
+        maxConnectionPoolSize: 5,
+        connectionAcquisitionTimeout: 10 * 1000,
+        connectionTimeout: 15 * 1000,
+      },
     );
     console.log(
       `[neo4j] driver created for ${URI} (database: ${DATABASE ?? "default"})`,
