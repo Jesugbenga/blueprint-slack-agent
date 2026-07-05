@@ -1,3 +1,4 @@
+import neo4j from "neo4j-driver";
 import { runQuery } from "./neo4j";
 
 /** Normalize a free-text topic into a stable snake_case key. */
@@ -150,7 +151,7 @@ export async function queryDecisions(
     ORDER BY d.date DESC
     LIMIT $limit
   `,
-    { topic: normalizeTopic(topic), teamId, limit },
+    { topic: normalizeTopic(topic), teamId, limit: neo4j.int(limit) },
   );
   return records as DecisionRecord[];
 }
@@ -173,7 +174,7 @@ export async function queryBlockers(
     ORDER BY m.date DESC
     LIMIT $limit
   `,
-    { topic: normalizeTopic(topic), teamId, limit },
+    { topic: normalizeTopic(topic), teamId, limit: neo4j.int(limit) },
   );
   return records as BlockerRecord[];
 }
@@ -193,7 +194,7 @@ export async function whoKnows(
     ORDER BY r.count DESC
     LIMIT $limit
   `,
-    { topic: normalizeTopic(topic), teamId, limit },
+    { topic: normalizeTopic(topic), teamId, limit: neo4j.int(limit) },
   );
   return records as ExpertRecord[];
 }
@@ -207,7 +208,7 @@ export async function getKnownTopics(teamId: string, limit = 200): Promise<strin
     ORDER BY t.name
     LIMIT $limit
   `,
-    { teamId, limit },
+    { teamId, limit: neo4j.int(limit) },
   );
   return records.map((r) => r.name as string);
 }
