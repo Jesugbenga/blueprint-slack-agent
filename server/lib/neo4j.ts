@@ -34,13 +34,13 @@ export function getDriver(): Driver {
         // Return Neo4j integers as native JS numbers so counts/dates are easy to use.
         disableLosslessIntegers: true,
         // Serverless tuning: Vercel freezes the function between invocations, so
-        // pooled TCP sockets to Aura go stale. Always liveness-check a pooled
-        // connection before reuse (0 = check every time), recycle connections
-        // aggressively, and fail fast instead of hanging for the 60s default.
-        connectionLivenessCheckTimeout: 0,
-        maxConnectionLifetime: 60 * 1000,
-        maxConnectionPoolSize: 5,
-        connectionAcquisitionTimeout: 10 * 1000,
+        // pooled sockets to Aura can go stale. Recycle connections well before
+        // Aura's idle cutoff and cap the pool for per-invocation concurrency.
+        // Stale-connection recovery is handled by resetDriver() + retry in
+        // runQuery, so we keep the acquisition timeout generous here.
+        maxConnectionLifetime: 45 * 1000,
+        maxConnectionPoolSize: 10,
+        connectionAcquisitionTimeout: 20 * 1000,
         connectionTimeout: 15 * 1000,
       },
     );
@@ -49,6 +49,30 @@ export function getDriver(): Driver {
     );
   }
   return driver;
+}
+
+/**
+ * Drop the shared driver so the next getDriver() builds a fresh one. Used to
+ * recover from a poisoned pool (e.g. connections leaked when a serverless
+ * invocation is killed mid-query). Closing is fire-and-forget because a dead
+ * socket's close can itself hang.
+ */
+function resetDriver(): void {
+  const stale = driver;
+  driver = null;
+  if (stale) {
+    void stale.close().catch(() => {
+      /* ignore — we're discarding it anyway */
+    });
+  }
+}
+
+/** Errors that indicate the connection pool is stale/exhausted and worth a reset+retry. */
+function isConnectionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /acquisition timed out|ServiceUnavailable|SessionExpired|Pool|connection|ECONNRESET|ETIMEDOUT|socket hang up/i.test(
+    msg,
+  );
 }
 
 export interface ConnectivityResult {
@@ -90,13 +114,32 @@ export async function verifyConnectivity(): Promise<ConnectivityResult> {
 }
 
 /**
- * Run a Cypher query with timing + error logging.
+ * Run a Cypher query with timing + error logging. On a connection-level error
+ * (typical after a serverless freeze leaves the pool stale) it resets the driver
+ * and retries once against a fresh connection.
  * @param name Optional label used in logs to identify the query.
  */
 export async function runQuery(
   query: string,
   params: Record<string, unknown> = {},
   name = "query",
+) {
+  try {
+    return await runOnce(query, params, name);
+  } catch (err) {
+    if (!isConnectionError(err)) throw err;
+    console.warn(
+      `[neo4j] ${name} hit a connection error — resetting driver and retrying once`,
+    );
+    resetDriver();
+    return await runOnce(query, params, name);
+  }
+}
+
+async function runOnce(
+  query: string,
+  params: Record<string, unknown>,
+  name: string,
 ) {
   const start = Date.now();
   const session = getDriver().session(
