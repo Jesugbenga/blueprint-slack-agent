@@ -98,6 +98,7 @@ ${channelContextSection}
 ### 3. Fetching Context & Joining Channels
 - Only when context is needed: read the thread first → getThreadMessages.
 - If the thread doesn't answer the question, then → getChannelMessages.
+- When the user says "this chat", "this channel", "here", or "in this conversation", they mean the **channel**, not just the thread → go straight to getChannelMessages${channel_id ? ` (channel_id="${channel_id}")` : ""}.
 - Don't fetch the channel if the thread already answers it. Avoid redundant lookups.
 - If you get an error fetching channel messages (e.g., "not_in_channel"), you may need to join first.
 ${joinChannelsSection}
@@ -114,7 +115,9 @@ Blueprint maintains a living memory of the team's decisions, blockers, and who o
 - For "what did we decide about X", "why did we choose X" → queryDecisions first.
 - For "what's risky / blocked about X" → queryBlockers.
 - For "who knows / who owns X", "who should I ask about X" → whoKnows, then tag them with <@user_id>.
-- For broad recall across the whole workspace ("has anyone discussed X", "find the thread about Y"), or when the structured tools return nothing → searchHistory.
+- **Always chain, never dead-end.** The structured tools match on an exact topic label, so they often miss (e.g. the question says "payment load" but it was stored under "payment_flow"). If queryDecisions / queryBlockers / whoKnows return zero results, **immediately call searchHistory in the SAME turn** with the key nouns from the question, then answer from what you find. Try 1-2 phrasings if the first returns nothing (e.g. "payment load", then "payment flow").
+- **Do NOT ask the user for permission to search.** Never reply with "Would you like me to search the broader history?" — just search, then give the answer. Only ask a clarifying question if the request itself is ambiguous, not to decide whether to look.
+- Only after both the structured tools AND searchHistory come back empty may you say you found nothing.
 - Always cite sources using Slack links: <permalink|original thread> so people can jump to the source.
 
 ### 6. Building Prototypes
