@@ -40,13 +40,35 @@ Message: "${text.replace(/"/g, '\\"')}"`,
   );
 
   try {
-    const parsed = JSON.parse(response.trim()) as ClassifiedMessage;
+    const parsed = JSON.parse(extractJson(response)) as ClassifiedMessage;
     // Keep topic labels stable so the graph doesn't fragment.
     if (parsed.topic) {
       parsed.topic = normalizeTopic(parsed.topic);
     }
     return parsed;
   } catch {
+    console.warn(
+      `[classifier] could not parse model response as JSON: ${response.slice(0, 200)}`,
+    );
     return { type: "none", topic: null, summary: null };
   }
+}
+
+/**
+ * Pull a JSON object out of a model response. Models often wrap JSON in
+ * ```json code fences or add a sentence around it, so we strip fences and fall
+ * back to the first {...} block before parsing.
+ */
+function extractJson(response: string): string {
+  let text = response.trim();
+  // Strip surrounding markdown code fences (```json ... ``` or ``` ... ```).
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fence) text = fence[1].trim();
+  // If there's still extra prose, grab the outermost object.
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first !== -1 && last !== -1 && last > first) {
+    text = text.slice(first, last + 1);
+  }
+  return text;
 }
