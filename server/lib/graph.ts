@@ -212,3 +212,118 @@ export async function getKnownTopics(teamId: string, limit = 200): Promise<strin
   );
   return records.map((r) => r.name as string);
 }
+
+// ---------------------------------------------------------------------------
+// Design layer — collaborative Block Kit UI designs, their current spec, and an
+// append-only edit history, all tenant-scoped by teamId.
+// ---------------------------------------------------------------------------
+
+export interface DesignRecord {
+  title: string;
+  topic: string;
+  description: string;
+  status: "draft" | "approved";
+  /** JSON-encoded UISpec (array of components). */
+  spec: string;
+  /** JSON-encoded DesignEnrichment snapshot. */
+  enrichment: string;
+}
+
+/** Create or replace a design's current state. */
+export async function saveDesign(opts: {
+  designId: string;
+  teamId: string;
+  channel: string;
+  threadTs: string;
+  title: string;
+  topic: string;
+  description: string;
+  status: "draft" | "approved";
+  spec: string;
+  enrichment: string;
+  authorId: string;
+  authorName: string;
+}) {
+  await runQuery(
+    `
+    MERGE (d:Design {designId: $designId, teamId: $teamId})
+    ON CREATE SET d.createdAt = datetime()
+    SET d.channel = $channel,
+        d.threadTs = $threadTs,
+        d.title = $title,
+        d.topic = $topic,
+        d.description = $description,
+        d.status = $status,
+        d.spec = $spec,
+        d.enrichment = $enrichment,
+        d.updatedAt = datetime()
+    MERGE (p:Person {slackId: $authorId, teamId: $teamId})
+    SET p.name = $authorName
+    MERGE (p)-[:CREATED]->(d)
+  `,
+    opts,
+  );
+}
+
+/** Update just the spec/status of an existing design. */
+export async function updateDesignSpec(opts: {
+  designId: string;
+  teamId: string;
+  spec: string;
+  status: "draft" | "approved";
+}) {
+  await runQuery(
+    `
+    MATCH (d:Design {designId: $designId, teamId: $teamId})
+    SET d.spec = $spec, d.status = $status, d.updatedAt = datetime()
+  `,
+    opts,
+  );
+}
+
+/** Load a design's current state, or null if it doesn't exist. */
+export async function getDesign(
+  designId: string,
+  teamId: string,
+): Promise<DesignRecord | null> {
+  const records = await runQuery(
+    `
+    MATCH (d:Design {designId: $designId, teamId: $teamId})
+    RETURN d.title AS title,
+           d.topic AS topic,
+           d.description AS description,
+           d.status AS status,
+           d.spec AS spec,
+           d.enrichment AS enrichment
+  `,
+    { designId, teamId },
+  );
+  return (records[0] as DesignRecord | undefined) ?? null;
+}
+
+/** Append an entry to a design's edit history (who changed what, when). */
+export async function recordDesignEdit(opts: {
+  designId: string;
+  teamId: string;
+  action: string;
+  detail: string;
+  byId: string;
+  byName: string;
+}) {
+  await runQuery(
+    `
+    MATCH (d:Design {designId: $designId, teamId: $teamId})
+    MERGE (p:Person {slackId: $byId, teamId: $teamId})
+    SET p.name = $byName
+    CREATE (e:DesignEdit {
+      action: $action,
+      detail: $detail,
+      teamId: $teamId,
+      at: datetime()
+    })
+    MERGE (p)-[:MADE_EDIT]->(e)
+    MERGE (e)-[:ON_DESIGN]->(d)
+  `,
+    opts,
+  );
+}

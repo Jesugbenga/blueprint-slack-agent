@@ -578,6 +578,127 @@ const scaffold = tool({
   },
 });
 
+const designUI = tool({
+  description:
+    "Turn a plain-English feature request into an INTERACTIVE UI MOCKUP rendered as Slack Block Kit directly in the thread — a real product screen (header, form fields, activity lists, buttons), not code or documentation. The whole team can then edit, add, or remove components and approve the design. Use this whenever a PM asks to 'design', 'mock up', 'build a UI/page/screen', 'wireframe', or 'prototype the interface' for a feature.",
+  inputSchema: z.object({
+    description: z
+      .string()
+      .describe(
+        "The feature to design, in plain English, e.g. 'a user profile page that shows activity history and lets users update their email'.",
+      ),
+    topic: z
+      .string()
+      .optional()
+      .describe(
+        "Optional short topic label to ground the design in team memory, e.g. 'user_profile'.",
+      ),
+  }),
+  execute: async ({ description, topic }, { experimental_context }) => {
+    "use step";
+    const ctx = experimental_context as SlackAgentContextInput;
+    const { randomUUID } = await import("node:crypto");
+    const { WebClient } = await import("@slack/web-api");
+    const { generateDesign } = await import("~/lib/ai/design");
+    const { renderDesignBlocks } = await import("~/lib/slack/design-blocks");
+    const { saveDesign, recordDesignEdit } = await import("~/lib/graph");
+    try {
+      const design = await generateDesign(description, ctx.team_id, topic);
+      const designId = randomUUID();
+      const authorId = ctx.user_id ?? "unknown";
+      const client = new WebClient(ctx.token);
+      const channel = ctx.dm_channel;
+
+      // Step 1 — post the enriched context summary.
+      const expertLine =
+        design.experts.length > 0
+          ? design.experts
+              .slice(0, 3)
+              .map((e) => `<@${e.personId}>`)
+              .join(", ")
+          : "none on record yet";
+      const decisionLine =
+        design.groundingDecisions.length > 0
+          ? design.groundingDecisions
+              .slice(0, 3)
+              .map((d) => `• ${d.summary}`)
+              .join("\n")
+          : "• none found";
+      await client.chat.postMessage({
+        channel,
+        thread_ts: ctx.thread_ts,
+        text: `Designing: ${design.title}`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*🧠 Enriched context for:* _${description}_\n\n*Relevant past decisions*\n${decisionLine}\n\n*Suggested experts:* ${expertLine}`,
+            },
+          },
+        ],
+      });
+
+      // Persist the initial design state before rendering.
+      await saveDesign({
+        designId,
+        teamId: ctx.team_id,
+        channel,
+        threadTs: ctx.thread_ts,
+        title: design.title,
+        topic: design.topic,
+        description,
+        status: "draft",
+        spec: JSON.stringify(design.spec),
+        enrichment: JSON.stringify(design.enrichment),
+        authorId,
+        authorName: "PM",
+      });
+      await recordDesignEdit({
+        designId,
+        teamId: ctx.team_id,
+        action: "create",
+        detail: `Created design "${design.title}" from: ${description}`,
+        byId: authorId,
+        byName: "PM",
+      });
+
+      // Step 2 — post the interactive Block Kit design.
+      await client.chat.postMessage({
+        channel,
+        thread_ts: ctx.thread_ts,
+        text: `Design: ${design.title}`,
+        blocks: renderDesignBlocks({
+          designId,
+          title: design.title,
+          spec: design.spec,
+          status: "draft",
+          enrichment: design.enrichment,
+        }),
+        metadata: {
+          event_type: "blueprint_design",
+          event_payload: { designId },
+        },
+      });
+
+      return {
+        success: true,
+        title: design.title,
+        componentCount: design.spec.length,
+        message:
+          "Posted an enriched context summary and an interactive Block Kit design. The team can edit, add, remove components, and approve it in the thread.",
+      };
+    } catch (error) {
+      console.error("Failed to generate design:", error);
+      return {
+        success: false,
+        message: "Failed to generate the UI design",
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  },
+});
+
 export const slackTools = {
   getChannelMessages,
   getThreadMessages,
@@ -588,4 +709,5 @@ export const slackTools = {
   whoKnows,
   searchHistory,
   scaffold,
+  designUI,
 };

@@ -51,6 +51,7 @@ const appMentionCallback = async ({
         thread_ts: thread_ts,
         is_dm: false,
         team_id: context.teamId ?? "",
+        user_id: event.user,
         bot_id: context.botId,
         token: getClientToken(client),
       },

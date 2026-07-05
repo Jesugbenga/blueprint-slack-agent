@@ -10,6 +10,8 @@ export type SlackAgentContextInput = {
   is_dm: boolean;
   /** The team ID (workspace ID) for API calls */
   team_id: string;
+  /** The Slack user who triggered this conversation (for attributing edits) */
+  user_id?: string;
   /** The bot ID to identify assistant messages */
   bot_id?: string;
   /** The Slack bot token for creating the client */
