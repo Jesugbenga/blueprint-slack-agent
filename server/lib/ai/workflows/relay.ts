@@ -7,7 +7,6 @@ import {
   recordRelay,
   whoKnows,
 } from "~/lib/graph";
-import { createSlackClient } from "~/lib/slack/client";
 import { slackPermalink } from "~/lib/slack/utils";
 import {
   resolvePersonTimezone,
@@ -46,8 +45,6 @@ export async function asyncRelayWorkflow(input: RelayWorkflowInput) {
 }
 
 async function runRelay(input: RelayWorkflowInput): Promise<void> {
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
-
   // Someone may have already replied — don't relay a resolved question.
   if (await threadHasHumanReply(input)) {
     await markQuestionAnswered(input.questionId, input.teamId, 0).catch(
@@ -68,11 +65,7 @@ async function runRelay(input: RelayWorkflowInput): Promise<void> {
       source && slackPermalink(source.channel, source.threadTs)
         ? ` (source: <${slackPermalink(source.channel, source.threadTs)}|prior decision>)`
         : "";
-    await client.chat.postMessage({
-      channel: input.channel,
-      thread_ts: input.threadTs,
-      text: `${scored.answer}${link}`,
-    });
+    await postThreadMessage(input, `${scored.answer}${link}`);
     await markQuestionAnswered(
       input.questionId,
       input.teamId,
@@ -82,13 +75,30 @@ async function runRelay(input: RelayWorkflowInput): Promise<void> {
   }
 
   // Low confidence — hand off to the best-qualified person for their 9am.
-  await relayToExpert(client, input, scored.confidence);
+  await relayToExpert(input, scored.confidence);
+}
+
+/** Post a reply into the question's thread. */
+async function postThreadMessage(
+  input: RelayWorkflowInput,
+  text: string,
+): Promise<void> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
+  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  await client.chat.postMessage({
+    channel: input.channel,
+    thread_ts: input.threadTs,
+    text,
+  });
 }
 
 /** True if a non-bot user other than the asker has replied in the thread. */
 async function threadHasHumanReply(
   input: RelayWorkflowInput,
 ): Promise<boolean> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
   try {
     const res = await client.conversations.replies({
@@ -137,10 +147,12 @@ Return ONLY valid JSON. No markdown, no code fences.`,
 }
 
 async function relayToExpert(
-  client: ReturnType<typeof createSlackClient>,
   input: RelayWorkflowInput,
   confidence: number,
 ): Promise<void> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
+  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
   const experts = await whoKnows(input.topic, input.teamId).catch(() => []);
   const expert = experts.find((e) => e.personId !== input.askerId);
   if (!expert) {

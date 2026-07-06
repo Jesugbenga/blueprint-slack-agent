@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { sleep } from "workflow";
 import { detectContradiction } from "~/lib/ai/drift";
 import { planDecisionHook, planModHook } from "~/lib/ai/workflows/hooks";
@@ -22,7 +21,6 @@ import {
   parsePlanModification,
   planActionBlocks,
 } from "~/lib/planner";
-import { createSlackClient } from "~/lib/slack/client";
 
 /**
  * 48-hour verify window. Lower this temporarily (e.g. "2 minutes") to demo the
@@ -56,7 +54,7 @@ interface GatherResult {
 export async function planWorkflow(input: PlanWorkflowInput) {
   "use workflow";
 
-  const planId = randomUUID();
+  const planId = crypto.randomUUID();
   const gathered = await gatherAndPlan(input);
   let phases = gathered.phases;
   let warning: string | undefined;
@@ -115,6 +113,8 @@ export async function planWorkflow(input: PlanWorkflowInput) {
 // ---------------------------------------------------------------------------
 
 async function gatherAndPlan(input: PlanWorkflowInput): Promise<GatherResult> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
 
   // Thinking state.
@@ -168,6 +168,8 @@ async function postPlanMessage(
   graphSummary: string,
   warning?: string,
 ): Promise<void> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
   await client.chat.postMessage({
     channel: input.channel,
@@ -184,6 +186,8 @@ async function postThreadReply(
   input: PlanWorkflowInput,
   text: string,
 ): Promise<void> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
   await client.chat.postMessage({
     channel: input.channel,
@@ -264,6 +268,8 @@ async function runVerify(
   phases: PlanPhase[],
   approvedAtSec: number,
 ): Promise<void> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
 
   // Who has posted in the channel since approval?

@@ -5,7 +5,6 @@ import {
   getMostActiveChannels,
   getOpenItemsForPerson,
 } from "~/lib/graph";
-import { createSlackClient } from "~/lib/slack/client";
 import { handoffBlocks } from "~/lib/slack/handoff-blocks";
 import {
   isWithinWorkday,
@@ -39,6 +38,8 @@ export async function endOfDayHandoffWorkflow(input: HandoffWorkflowInput) {
 async function computeHandoffDelay(
   input: HandoffWorkflowInput,
 ): Promise<number> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
   const tz = await resolvePersonTimezone(
     client,
@@ -53,6 +54,8 @@ async function computeHandoffDelay(
 
 /** Build and post the handoff brief, tagging a compatible online teammate. */
 async function runHandoff(input: HandoffWorkflowInput): Promise<void> {
+  "use step";
+  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
 
   const items = await getOpenItemsForPerson(input.personId, input.teamId).catch(
