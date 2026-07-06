@@ -1,0 +1,109 @@
+import { sleep } from "workflow";
+import { generateHandoffBrief } from "~/lib/ai/handoff";
+import {
+  getCoverCandidates,
+  getMostActiveChannels,
+  getOpenItemsForPerson,
+} from "~/lib/graph";
+import { createSlackClient } from "~/lib/slack/client";
+import { handoffBlocks } from "~/lib/slack/handoff-blocks";
+import {
+  isWithinWorkday,
+  msUntilLocalMinuteOfDay,
+  resolvePersonTimezone,
+  WORKDAY_END_MIN,
+} from "~/lib/timezone";
+
+export interface HandoffWorkflowInput {
+  personId: string;
+  personName: string;
+  teamId: string;
+}
+
+/**
+ * Per-user durable workflow that fires an end-of-day handoff at 5:30pm in the
+ * user's local timezone, then re-queues itself for the next day. Started once
+ * per user (idempotently) from the message classifier.
+ */
+export async function endOfDayHandoffWorkflow(input: HandoffWorkflowInput) {
+  "use workflow";
+  // Runs indefinitely: sleep until the next local 5:30pm, post, repeat.
+  for (;;) {
+    const delayMs = await computeHandoffDelay(input);
+    await sleep(delayMs);
+    await runHandoff(input);
+  }
+}
+
+/** How long until this user's next local workday-end. */
+async function computeHandoffDelay(
+  input: HandoffWorkflowInput,
+): Promise<number> {
+  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  const tz = await resolvePersonTimezone(
+    client,
+    input.personId,
+    input.teamId,
+    input.personName,
+  );
+  const offset = tz?.tzOffset ?? 0;
+  const endMin = tz?.workdayEnd ?? WORKDAY_END_MIN;
+  return msUntilLocalMinuteOfDay(offset, endMin);
+}
+
+/** Build and post the handoff brief, tagging a compatible online teammate. */
+async function runHandoff(input: HandoffWorkflowInput): Promise<void> {
+  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+
+  const items = await getOpenItemsForPerson(input.personId, input.teamId).catch(
+    () => [],
+  );
+  if (items.length === 0) return;
+
+  const sinceIso = new Date(Date.now() - 16 * 60 * 60 * 1000).toISOString();
+  const activeChannels = await getMostActiveChannels(
+    input.personId,
+    input.teamId,
+    sinceIso,
+  ).catch(() => []);
+  const channels =
+    activeChannels.length > 0
+      ? activeChannels
+      : [...new Set(items.map((i) => i.channel).filter(Boolean))];
+  if (channels.length === 0) return;
+
+  const brief = await generateHandoffBrief(input.personName, items);
+
+  // Tag the highest-activity teammate who is currently inside their workday.
+  const candidates = await getCoverCandidates(
+    input.teamId,
+    input.personId,
+  ).catch(() => []);
+  const cover = candidates.find((c) =>
+    isWithinWorkday({
+      timezone: c.timezone,
+      tzOffset: c.tzOffset,
+      workdayEnd: c.workdayEnd,
+    }),
+  );
+
+  const blocks = handoffBlocks({
+    personName: input.personName,
+    brief,
+    items,
+    taggedPersonId: cover?.personId,
+    taggedTimezone: cover?.timezone,
+  });
+
+  for (const channel of channels) {
+    try {
+      await client.chat.postMessage({
+        channel,
+        blocks,
+        text: `End-of-day handoff for ${input.personName}`,
+      });
+    } catch (err) {
+      console.error(`[handoff] failed to post to ${channel}:`, err);
+    }
+  }
+}

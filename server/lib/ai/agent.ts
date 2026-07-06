@@ -1,9 +1,9 @@
-import { DurableAgent } from "@workflow/ai/agent";
-import type { CompatibleLanguageModel } from "@workflow/ai/agent";
-import { google } from "@workflow/ai/google";
 import { cerebras } from "@ai-sdk/cerebras";
 import { groq } from "@ai-sdk/groq";
 import { mistral } from "@ai-sdk/mistral";
+import type { CompatibleLanguageModel } from "@workflow/ai/agent";
+import { DurableAgent } from "@workflow/ai/agent";
+import { google } from "@workflow/ai/google";
 import type { SlackAgentContextInput } from "./context";
 import { slackTools } from "./tools";
 
@@ -18,7 +18,9 @@ const AGENT_MODELS: Array<{ env: string; make: () => ModelFactory }> = [
     env: "MISTRAL_API_KEY",
     make: () => async () => {
       "use step";
-      return mistral("mistral-small-2506") as unknown as CompatibleLanguageModel;
+      return mistral(
+        "mistral-small-2506",
+      ) as unknown as CompatibleLanguageModel;
     },
   },
   {
@@ -28,7 +30,10 @@ const AGENT_MODELS: Array<{ env: string; make: () => ModelFactory }> = [
       return groq("llama-3.1-8b-instant") as unknown as CompatibleLanguageModel;
     },
   },
-  { env: "GOOGLE_GENERATIVE_AI_API_KEY", make: () => google("gemini-2.5-flash") },
+  {
+    env: "GOOGLE_GENERATIVE_AI_API_KEY",
+    make: () => google("gemini-2.5-flash"),
+  },
   {
     env: "CEREBRAS_API_KEY",
     make: () => async () => {
@@ -119,11 +124,6 @@ Blueprint maintains a living memory of the team's decisions, blockers, and who o
 - **Do NOT ask the user for permission to search.** Never reply with "Would you like me to search the broader history?" — just search, then give the answer. Only ask a clarifying question if the request itself is ambiguous, not to decide whether to look.
 - Only after both the structured tools AND searchHistory come back empty may you say you found nothing.
 - Always cite sources using Slack links: <permalink|original thread> so people can jump to the source.
-
-### 6. Building Prototypes & Designs
-- When a PM asks you to **"design", "mock up", "build a UI / page / screen", "wireframe", or "prototype the interface"** for a feature → use the **designUI** tool. It posts an enriched context summary plus an interactive Block Kit UI the whole team can edit, add to, remove from, and approve in the thread.
-- When the user instead asks to **"generate code", "scaffold the API", "build the backend", or produce runnable files** → use the **scaffold** tool.
-- Both tools post their own interactive card into the thread, so after calling one just briefly confirm what you produced — don't paste the UI or code yourself.
 
 ## Decision Flow
 

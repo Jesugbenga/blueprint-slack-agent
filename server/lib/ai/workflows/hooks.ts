@@ -14,3 +14,23 @@ export const channelJoinApprovalHook = defineHook({
     channelName: z.string().optional(),
   }),
 });
+
+/**
+ * Plan-Execute-Verify approval gate. Resumed by the plan action buttons with
+ * the chosen action; the workflow loops on adjust/reassign and exits on approve.
+ */
+export const planDecisionHook = defineHook({
+  schema: z.object({
+    action: z.enum(["approve", "adjust", "reassign"]),
+  }),
+});
+
+/**
+ * Freeform plan modification. Resumed by the message listener when the user
+ * replies in the plan thread after clicking Adjust or Reassign.
+ */
+export const planModHook = defineHook({
+  schema: z.object({
+    text: z.string(),
+  }),
+});

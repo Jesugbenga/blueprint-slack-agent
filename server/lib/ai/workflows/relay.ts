@@ -1,0 +1,198 @@
+import { sleep } from "workflow";
+import { generateJson } from "~/lib/ai/json";
+import {
+  type DecisionRecord,
+  markQuestionAnswered,
+  queryDecisions,
+  recordRelay,
+  whoKnows,
+} from "~/lib/graph";
+import { createSlackClient } from "~/lib/slack/client";
+import { slackPermalink } from "~/lib/slack/utils";
+import {
+  resolvePersonTimezone,
+  unixSecondsForNextLocalMinuteOfDay,
+  WORKDAY_START_MIN,
+} from "~/lib/timezone";
+
+export interface RelayWorkflowInput {
+  questionId: string;
+  askerId: string;
+  askerName: string;
+  text: string;
+  /** Topic the classifier assigned to the question (avoids a second model call). */
+  topic: string;
+  channel: string;
+  threadTs: string;
+  teamId: string;
+}
+
+interface ConfidenceResult {
+  confidence: number;
+  answer: string;
+  /** Index into the provided decisions list that best supports the answer, or -1. */
+  sourceIndex: number;
+}
+
+/**
+ * The async relay: 25 minutes after a question goes unanswered, either answer it
+ * from team memory (if confident) or schedule a briefing DM to the best expert
+ * for the start of their next workday.
+ */
+export async function asyncRelayWorkflow(input: RelayWorkflowInput) {
+  "use workflow";
+  await sleep("25 minutes");
+  await runRelay(input);
+}
+
+async function runRelay(input: RelayWorkflowInput): Promise<void> {
+  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+
+  // Someone may have already replied — don't relay a resolved question.
+  if (await threadHasHumanReply(input)) {
+    await markQuestionAnswered(input.questionId, input.teamId, 0).catch(
+      () => {},
+    );
+    return;
+  }
+
+  const decisions = await queryDecisions(input.topic, input.teamId).catch(
+    () => [] as DecisionRecord[],
+  );
+
+  const scored = await scoreConfidence(input, decisions);
+
+  if (scored.confidence > 0.7 && scored.answer.trim()) {
+    const source = decisions[scored.sourceIndex];
+    const link =
+      source && slackPermalink(source.channel, source.threadTs)
+        ? ` (source: <${slackPermalink(source.channel, source.threadTs)}|prior decision>)`
+        : "";
+    await client.chat.postMessage({
+      channel: input.channel,
+      thread_ts: input.threadTs,
+      text: `${scored.answer}${link}`,
+    });
+    await markQuestionAnswered(
+      input.questionId,
+      input.teamId,
+      scored.confidence,
+    );
+    return;
+  }
+
+  // Low confidence — hand off to the best-qualified person for their 9am.
+  await relayToExpert(client, input, scored.confidence);
+}
+
+/** True if a non-bot user other than the asker has replied in the thread. */
+async function threadHasHumanReply(
+  input: RelayWorkflowInput,
+): Promise<boolean> {
+  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  try {
+    const res = await client.conversations.replies({
+      channel: input.channel,
+      ts: input.threadTs,
+      limit: 30,
+    });
+    return (res.messages ?? []).some(
+      (m) =>
+        !m.bot_id &&
+        m.user &&
+        m.user !== input.askerId &&
+        m.ts !== input.threadTs,
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function scoreConfidence(
+  input: RelayWorkflowInput,
+  decisions: DecisionRecord[],
+): Promise<ConfidenceResult> {
+  const context =
+    decisions.length > 0
+      ? decisions.map((d, i) => `[${i}] ${d.summary}`).join("\n")
+      : "(no related decisions found)";
+
+  return generateJson<ConfidenceResult>(
+    `You are Blueprint. An engineer asked a question. Using ONLY the team's stored context below, decide how confidently you can answer it.
+
+Question: "${input.text.replace(/"/g, '\\"')}"
+
+Stored decisions/context (indexed):
+${context}
+
+Return ONLY a JSON object:
+- "confidence": number 0-1, how confident you are the stored context actually answers the question.
+- "answer": if confident, a concise answer grounded in the context (else "").
+- "sourceIndex": the index [n] of the decision that best supports the answer, or -1 if none.
+
+Return ONLY valid JSON. No markdown, no code fences.`,
+    { confidence: 0, answer: "", sourceIndex: -1 },
+    "relay-confidence",
+  );
+}
+
+async function relayToExpert(
+  client: ReturnType<typeof createSlackClient>,
+  input: RelayWorkflowInput,
+  confidence: number,
+): Promise<void> {
+  const experts = await whoKnows(input.topic, input.teamId).catch(() => []);
+  const expert = experts.find((e) => e.personId !== input.askerId);
+  if (!expert) {
+    // Nobody to relay to — leave a note so the thread isn't silent.
+    await client.chat.postMessage({
+      channel: input.channel,
+      thread_ts: input.threadTs,
+      text: "I couldn't answer this from team memory and don't yet know who owns this area. Someone with context may need to weigh in.",
+    });
+    return;
+  }
+
+  const tz = await resolvePersonTimezone(
+    client,
+    expert.personId,
+    input.teamId,
+    expert.personName,
+  );
+  const threadLink = slackPermalink(input.channel, input.threadTs);
+
+  // Queue a DM to land at 9am the expert's local time.
+  try {
+    const im = await client.conversations.open({ users: expert.personId });
+    const dmChannel = im.channel?.id;
+    if (dmChannel) {
+      const postAt = tz
+        ? unixSecondsForNextLocalMinuteOfDay(tz.tzOffset, WORKDAY_START_MIN)
+        : Math.floor(Date.now() / 1000) + 60;
+      await client.chat.scheduleMessage({
+        channel: dmChannel,
+        post_at: postAt,
+        text: `☀️ Morning briefing from Blueprint\n\n*${input.askerName}* asked a question in <#${input.channel}> that needs your area of expertise (*${input.topic}*):\n\n> ${input.text}\n\n${threadLink ? `<${threadLink}|Open the thread>` : ""}`,
+      });
+    }
+  } catch (err) {
+    console.error("[relay] failed to schedule DM:", err);
+  }
+
+  const tzLabel = tz
+    ? ` at 9am ${tz.timezone} time`
+    : " when they're back online";
+  await client.chat.postMessage({
+    channel: input.channel,
+    thread_ts: input.threadTs,
+    text: `I've flagged this for <@${expert.personId}> who handles ${input.topic} — they'll see it${tzLabel}.`,
+  });
+
+  await recordRelay({
+    questionId: input.questionId,
+    toPersonId: expert.personId,
+    toPersonName: expert.personName,
+    teamId: input.teamId,
+    confidence,
+  });
+}

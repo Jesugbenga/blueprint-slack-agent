@@ -1,24 +1,18 @@
 import type { App } from "@slack/bolt";
+import { CHANNEL_JOIN_APPROVAL_ACTION } from "~/lib/slack/blocks";
 import {
-  CHANNEL_JOIN_APPROVAL_ACTION,
-  SCAFFOLD_APPROVE_ACTION,
-  SCAFFOLD_MODIFY_ACTION,
-  SCAFFOLD_REJECT_ACTION,
-} from "~/lib/slack/blocks";
-import {
-  DESIGN_ADD_ACTION,
-  DESIGN_APPROVE_ACTION,
-  DESIGN_COMPONENT_MENU,
-} from "~/lib/slack/design-blocks";
+  DRIFT_KEEP_ORIGINAL_ACTION,
+  DRIFT_NEW_DIRECTION_ACTION,
+} from "~/lib/slack/drift-blocks";
+import { GAP_FILL_ACTION, GAP_SKIP_ACTION } from "~/lib/slack/gap-blocks";
+import { HANDOFF_PICKUP_ACTION } from "~/lib/slack/handoff-blocks";
 import { channelJoinApprovalCallback } from "./channel-join-approval";
-import {
-  designAddBlockCallback,
-  designApproveCallback,
-  designComponentMenuCallback,
-} from "./design-action";
+import { driftResponseCallback } from "./drift-response";
 import { feedbackButtonsCallback } from "./feedback-button-action";
+import { gapActionsCallback } from "./gapActions";
+import { handoffPickupCallback } from "./handoff-action";
+import { planActions } from "./planActions";
 import sampleActionCallback from "./sample-action";
-import { scaffoldReviewCallback } from "./scaffold-review-action";
 
 const register = (app: App) => {
   app.action("sample_action_id", sampleActionCallback);
@@ -29,14 +23,16 @@ const register = (app: App) => {
     `${CHANNEL_JOIN_APPROVAL_ACTION}_reject`,
     channelJoinApprovalCallback,
   );
-  // Scaffold review actions (approve / modify / reject buttons)
-  app.action(SCAFFOLD_APPROVE_ACTION, scaffoldReviewCallback);
-  app.action(SCAFFOLD_MODIFY_ACTION, scaffoldReviewCallback);
-  app.action(SCAFFOLD_REJECT_ACTION, scaffoldReviewCallback);
-  // Collaborative design actions (edit/remove overflow, add block, approve)
-  app.action(DESIGN_COMPONENT_MENU, designComponentMenuCallback);
-  app.action(DESIGN_ADD_ACTION, designAddBlockCallback);
-  app.action(DESIGN_APPROVE_ACTION, designApproveCallback);
+  // Feature 1 — end-of-day handoff "Pick this up" button
+  app.action(HANDOFF_PICKUP_ACTION, handoffPickupCallback);
+  // Feature 2 — decision drift response buttons
+  app.action(DRIFT_NEW_DIRECTION_ACTION, driftResponseCallback);
+  app.action(DRIFT_KEEP_ORIGINAL_ACTION, driftResponseCallback);
+  // Feature 3 — context gap buttons
+  app.action(GAP_FILL_ACTION, gapActionsCallback);
+  app.action(GAP_SKIP_ACTION, gapActionsCallback);
+  // Plan-Execute-Verify buttons (approve / adjust / reassign)
+  planActions(app);
 };
 
 export default { register };

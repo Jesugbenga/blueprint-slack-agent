@@ -34,13 +34,15 @@ export function getDriver(): Driver {
         // Return Neo4j integers as native JS numbers so counts/dates are easy to use.
         disableLosslessIntegers: true,
         // Give Vercel's cold TLS handshake to Aura room to complete (short
-        // timeouts caused "failed to establish connection" / routing-discovery
-        // failures). Recycle connections every few minutes so sockets don't go
-        // stale across serverless freezes; genuine staleness is caught by the
+        // timeouts caused "failed to establish connection" errors). Keep a
+        // moderate connection LIFETIME so that during active use consecutive
+        // commands reuse a warm connection (fast) instead of paying a fresh
+        // routing-discovery handshake every time — while still recycling before
+        // long idle. Any stale socket that slips through is caught by the
         // resetDriver() + retry in runQuery.
         connectionTimeout: 30 * 1000,
         connectionAcquisitionTimeout: 30 * 1000,
-        maxConnectionLifetime: 5 * 60 * 1000,
+        maxConnectionLifetime: 2 * 60 * 1000,
         maxConnectionPoolSize: 10,
       },
     );

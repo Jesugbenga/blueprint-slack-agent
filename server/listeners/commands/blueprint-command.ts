@@ -1,17 +1,16 @@
-import { randomUUID } from "node:crypto";
 import type {
   AllMiddlewareArgs,
   SlackCommandMiddlewareArgs,
 } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
-import { generateScaffold } from "~/lib/ai/scaffold";
+import { start } from "workflow/api";
+import { planWorkflow } from "~/lib/ai/workflows/planWorkflow";
 import { queryBlockers, queryDecisions, whoKnows } from "~/lib/graph";
-import { deliverScaffold } from "~/lib/slack/scaffold-message";
 import { slackPermalink } from "~/lib/slack/utils";
 
 type RespondFn = SlackCommandMiddlewareArgs["respond"];
 
-/** Everything a subcommand needs to reply and (for scaffolding) upload files. */
+/** Everything a subcommand needs to reply and (for planning) anchor a thread. */
 interface CommandCtx {
   respond: RespondFn;
   client: WebClient;
@@ -21,7 +20,7 @@ interface CommandCtx {
 }
 
 interface ParsedCommand {
-  sub: "context" | "who-knows" | "risks" | "scaffold" | "help";
+  sub: "context" | "who-knows" | "risks" | "plan" | "help";
   arg: string;
 }
 
@@ -41,11 +40,8 @@ export function parseBlueprintCommand(text: string): ParsedCommand {
   if (lower.startsWith("risks")) {
     return { sub: "risks", arg: trimmed.replace(/^risks\s*/i, "") };
   }
-  if (lower.startsWith("scaffold") || lower.startsWith("prototype")) {
-    return {
-      sub: "scaffold",
-      arg: trimmed.replace(/^(scaffold|prototype)\s*/i, ""),
-    };
+  if (lower.startsWith("plan")) {
+    return { sub: "plan", arg: trimmed.replace(/^plan\s*/i, "") };
   }
   return { sub: "help", arg: "" };
 }
@@ -55,7 +51,7 @@ const HELP_TEXT = [
   "• `/blueprint context <topic>` — decisions already made about a topic, with links to the original threads",
   "• `/blueprint who knows <topic>` — who on the team has the most context on a topic",
   "• `/blueprint risks <topic>` — open blockers and concerns raised about a topic",
-  "• `/blueprint scaffold <feature description>` — turn an idea into a runnable prototype (schema + API + files)",
+  "• `/blueprint plan <feature description>` — run a Plan-Execute-Verify breakdown grounded in your team's graph",
 ].join("\n");
 
 function citation(channel?: string | null, ts?: string | null): string {
@@ -140,38 +136,42 @@ async function handleWhoKnows(arg: string, teamId: string, respond: RespondFn) {
   });
 }
 
-async function handleScaffold(arg: string, ctx: CommandCtx) {
+/**
+ * Manually kick off a Plan-Execute-Verify breakdown from a slash command. Posts
+ * an anchor message to thread the plan under, then starts the durable workflow.
+ */
+async function handlePlan(arg: string, ctx: CommandCtx) {
   if (!arg) {
     await ctx.respond({
       response_type: "ephemeral",
-      text: "Usage: `/blueprint scaffold <feature description>`",
+      text: "Usage: `/blueprint plan <describe the feature to plan>`",
+    });
+    return;
+  }
+  if (!ctx.channelId) {
+    await ctx.respond({
+      response_type: "ephemeral",
+      text: "I can only plan from within a channel.",
     });
     return;
   }
 
-  const { project, groundingDecisions, groundingBlockers } =
-    await generateScaffold(arg, ctx.teamId);
-
-  const grounded =
-    groundingDecisions.length + groundingBlockers.length > 0
-      ? `\n\n_Grounded in ${groundingDecisions.length} prior decision(s) and ${groundingBlockers.length} known blocker(s) from team memory._`
-      : "";
-
-  await deliverScaffold({
-    project,
-    scaffoldId: randomUUID(),
-    topic: arg,
-    description: arg,
-    groundedNote: grounded,
-    post: (m) =>
-      ctx.respond({
-        response_type: "in_channel",
-        text: m.text,
-        blocks: m.blocks,
-      }),
-    client: ctx.client,
-    channelId: ctx.channelId,
+  const anchor = await ctx.client.chat.postMessage({
+    channel: ctx.channelId,
+    text: `📋 Planning: ${arg}`,
   });
+  const threadTs = anchor.ts;
+  if (!threadTs) return;
+
+  await start(planWorkflow, [
+    {
+      channel: ctx.channelId,
+      threadTs,
+      userId: ctx.userId ?? "",
+      teamId: ctx.teamId,
+      requestText: arg,
+    },
+  ]);
 }
 
 /**
@@ -187,8 +187,8 @@ export async function runBlueprintCommand(text: string, ctx: CommandCtx) {
       return handleRisks(arg, ctx.teamId, ctx.respond);
     case "who-knows":
       return handleWhoKnows(arg, ctx.teamId, ctx.respond);
-    case "scaffold":
-      return handleScaffold(arg, ctx);
+    case "plan":
+      return handlePlan(arg, ctx);
     default:
       return ctx.respond({ response_type: "ephemeral", text: HELP_TEXT });
   }
@@ -201,8 +201,8 @@ export const blueprintCommandCallback = async ({
   client,
   logger,
 }: AllMiddlewareArgs & SlackCommandMiddlewareArgs) => {
-  // Ack immediately — AI scaffolding can exceed Slack's 3s limit, so the real
-  // work runs in the background and is delivered via the response_url.
+  // Ack immediately — the real work (AI planning) can exceed Slack's 3s limit,
+  // so it runs in the background and is delivered via the response_url.
   await ack();
 
   const ctx: CommandCtx = {

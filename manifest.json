@@ -27,7 +27,7 @@
                 "command": "/blueprint",
                 "url": "https://blueprint-slack-agent.vercel.app/api/slack/events",
                 "description": "Query Blueprint for team context, decisions, and expertise",
-                "usage_hint": "[context <topic>] | [who knows <topic>] | [risks <project>]",
+                "usage_hint": "[context <topic>] | [who knows <topic>] | [risks <project>] | [plan <feature>]",
                 "should_escape": false
             },
             {
@@ -57,7 +57,8 @@
                 "channels:join",
                 "users:read",
                 "users:read.email",
-                "files:write"
+                "files:write",
+                "chat:scheduledMessages:write"
             ],
            "user": [
                 "search:read",

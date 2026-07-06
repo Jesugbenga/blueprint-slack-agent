@@ -1,7 +1,12 @@
-import { normalizeTopic } from "./graph";
 import { generateBalanced } from "./ai/rotation";
+import { normalizeTopic } from "./graph";
 
-export type MessageType = "decision" | "blocker" | "question" | "none";
+export type MessageType =
+  | "decision"
+  | "blocker"
+  | "question"
+  | "feature_request"
+  | "none";
 
 export interface ClassifiedMessage {
   type: MessageType;
@@ -21,10 +26,14 @@ export async function classifyMessage(
   const response = await generateBalanced(
     `Analyze this Slack message and return a JSON object with these exact fields:
 
-- "type": one of "decision", "blocker", "question", or "none"
+- "type": one of "decision", "blocker", "question", "feature_request", or "none"
   - "decision": records a team decision ("we decided to...", "going with X", "agreed on...")
   - "blocker": someone is blocked or waiting ("blocked on...", "waiting for...", "can't proceed until...")
   - "question": an open question being asked ("how do we...", "has anyone...", "what's the best way...")
+  - "feature_request": a request to build or add something new — intent language like
+    "let's build", "we should add", "can we create", "I want to", "let's implement",
+    "we need a", "build a", "add support for". Prefer this over "question" when the
+    message is proposing work to be done rather than merely asking for information.
   - "none": casual chat, status updates, or anything else
 
 - "topic": short snake_case label for what this relates to 

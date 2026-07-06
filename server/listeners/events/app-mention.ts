@@ -8,6 +8,7 @@ import {
   getThreadContextAsModelMessage,
   updateAgentStatus,
 } from "~/lib/slack/utils";
+import { maybeHandlePlanRequest } from "./planTrigger";
 
 const appMentionCallback = async ({
   event,
@@ -22,13 +23,33 @@ const appMentionCallback = async ({
   // rate limits. The first delivery already started the workflow.
   if (context.retryNum) return;
 
-  logger.debug(`app_mention event received: ${JSON.stringify(event)}`);
   const thread_ts = event.thread_ts || event.ts;
   const channel = event.channel;
 
-  try {
-    let messages: ModelMessage[] = [];
+  // Kick off the thread-context fetch immediately so it runs in parallel with
+  // the planning classification below, instead of waiting for it. For a
+  // planning request this result is simply discarded.
+  const contextPromise = getThreadContextAsModelMessage({
+    channel,
+    ts: thread_ts,
+    botId: context.botId,
+    client,
+  }).catch((err): ModelMessage[] => {
+    logger.error("Failed to fetch thread context:", err);
+    return [];
+  });
 
+  // Plan-Execute-Verify: if this mention is a feature/build request, hand it to
+  // the plan workflow and bail out so the normal agent doesn't also respond.
+  try {
+    if (await maybeHandlePlanRequest({ event, context })) return;
+  } catch (err) {
+    logger.error("planTrigger failed:", err);
+  }
+
+  logger.debug(`app_mention event received: ${JSON.stringify(event)}`);
+
+  try {
     await updateAgentStatus({
       client,
       channel_id: channel,
@@ -36,12 +57,7 @@ const appMentionCallback = async ({
       status: "is typing...",
       loading_messages: ["is thinking..."],
     });
-    messages = await getThreadContextAsModelMessage({
-      channel,
-      ts: thread_ts,
-      botId: context.botId,
-      client,
-    });
+    const messages = await contextPromise;
 
     const run = await start(chatWorkflow, [
       messages,

@@ -1,11 +1,28 @@
+import { randomUUID } from "node:crypto";
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
+import type { WebClient } from "@slack/web-api";
+import { start } from "workflow/api";
+import { detectContradiction, extractProposal } from "../../lib/ai/drift";
+import { generateJson } from "../../lib/ai/json";
+import { endOfDayHandoffWorkflow } from "../../lib/ai/workflows/handoff";
+import { planModHook } from "../../lib/ai/workflows/hooks";
+import { asyncRelayWorkflow } from "../../lib/ai/workflows/relay";
 import { classifyMessage } from "../../lib/classifier";
 import {
+  getActivePlanForChannel,
+  getDecisionsAboutTopic,
   getKnownTopics,
+  getPlanByThread,
+  markPhaseComplete,
+  type PlanRecord,
   recordDiscussion,
   storeBlocker,
   storeDecision,
+  storeQuestion,
+  tryClaimHandoffSchedule,
 } from "../../lib/graph";
+import { driftBlocks } from "../../lib/slack/drift-blocks";
+import { handleFeatureRequest } from "./featureRequestHandler";
 
 type MessageArgs = SlackEventMiddlewareArgs<"message"> & AllMiddlewareArgs;
 
@@ -41,56 +58,348 @@ export async function messageClassifier({
   const teamId = context.teamId;
   if (!teamId) return;
 
-  // Fetch the real name from Slack — non-fatal if it fails
-  let userName = "Unknown";
-  try {
-    const info = await client.users.info({ user: userId });
-    userName = info.user?.real_name || info.user?.name || "Unknown";
-  } catch {
-    // continue with fallback
-  }
+  // Fetch the real name from Slack — cached in-process so a busy channel
+  // doesn't fire a users.info call on every single message.
+  const userName = await resolveUserName(client, userId);
 
   const channel = event.channel;
   const threadTs =
     "thread_ts" in event && event.thread_ts ? event.thread_ts : event.ts;
 
-  // Classify the message, reusing existing topic labels to avoid graph fragmentation
-  const knownTopics = await getKnownTopics(teamId).catch(() => []);
+  // PLAN — if this is a freeform reply inside a plan thread that's awaiting a
+  // modification, route it into the workflow and stop (don't classify the
+  // instruction as team chatter).
+  if ("thread_ts" in event && event.thread_ts) {
+    const routed = await routePlanModReply(
+      event.thread_ts,
+      event.text,
+      teamId,
+    ).catch(() => false);
+    if (routed) {
+      console.log("[Blueprint] routed plan modification reply");
+      return;
+    }
+  }
+
+  // FEATURE 2 — Decision Drift Detector. Kicked off in parallel so it never
+  // blocks classification; awaited at the very end so the serverless function
+  // doesn't freeze before the drift reply is posted. (Internally gated by a
+  // cheap regex so most messages never hit the model.)
+  const driftPromise = runDriftCheck(
+    client,
+    event.text,
+    channel,
+    threadTs,
+    teamId,
+  ).catch((err) => console.error("[drift] check failed:", err));
+
+  // FEATURE 1 — schedule this user's daily end-of-day handoff exactly once.
+  // Runs concurrently (not awaited before classification) and short-circuits on
+  // an in-process cache so it doesn't touch the DB on every message.
+  const handoffPromise = ensureHandoffScheduled(userId, userName, teamId).catch(
+    (err) => console.error("[handoff] failed to schedule:", err),
+  );
+
+  // Classify the message, reusing existing topic labels to avoid graph
+  // fragmentation. Known topics are cached briefly to save a read per message.
+  const knownTopics = await getCachedKnownTopics(teamId);
   const classified = await classifyMessage(event.text, knownTopics);
   console.log(
     `[Blueprint] classified type=${classified.type} topic=${classified.topic ?? "-"}`,
   );
 
-  // Nothing interesting — skip
-  if (classified.type === "none" || !classified.topic || !classified.summary) {
+  if (classified.topic && classified.summary) {
+    // Narrow once so the values stay `string` inside nested closures below.
+    const topic = classified.topic;
+    const summary = classified.summary;
+
+    // The topic-discussion write and the type-specific write are independent,
+    // so run them together instead of serializing two Neo4j round-trips.
+    const writes: Array<Promise<unknown>> = [
+      recordDiscussion(userId, userName, topic, teamId),
+    ];
+
+    if (classified.type === "decision") {
+      writes.push(
+        storeDecision({
+          personId: userId,
+          personName: userName,
+          topic,
+          summary,
+          channel,
+          threadTs,
+          teamId,
+        }),
+      );
+      console.log(`[Blueprint] Decision stored — topic: ${topic}`);
+    } else if (classified.type === "blocker") {
+      writes.push(
+        storeBlocker({
+          personId: userId,
+          personName: userName,
+          topic,
+          summary,
+          channel,
+          threadTs,
+          teamId,
+        }),
+      );
+      console.log(`[Blueprint] Blocker stored — topic: ${topic}`);
+    } else if (classified.type === "question") {
+      // FEATURE 1 — Async Relay. Record the question, then arm the durable
+      // relay workflow once it's stored.
+      const questionId = randomUUID();
+      writes.push(
+        storeQuestion({
+          questionId,
+          personId: userId,
+          personName: userName,
+          text: event.text,
+          channel,
+          threadTs,
+          teamId,
+        }).then(() =>
+          start(asyncRelayWorkflow, [
+            {
+              questionId,
+              askerId: userId,
+              askerName: userName,
+              text: event.text,
+              topic,
+              channel,
+              threadTs,
+              teamId,
+            },
+          ]),
+        ),
+      );
+      console.log(`[Blueprint] Relay armed — topic: ${topic}`);
+    } else if (classified.type === "feature_request") {
+      // FEATURE 3 — Context Gap Detector.
+      writes.push(
+        handleFeatureRequest({
+          client,
+          text: event.text,
+          channel,
+          threadTs,
+          teamId,
+          topic,
+        }),
+      );
+      console.log(`[Blueprint] Gap check run — topic: ${topic}`);
+    }
+
+    await Promise.all(writes);
+  }
+
+  // PLAN — completion detection on ordinary channel chatter ("PR is up", etc.).
+  await detectPlanCompletion(client, event.text, channel, teamId).catch((err) =>
+    console.error("[plan-complete] check failed:", err),
+  );
+
+  // Let the parallel background work settle before the function returns.
+  await Promise.all([driftPromise, handoffPromise]);
+}
+
+// ---------------------------------------------------------------------------
+// In-process caches — cut redundant Slack/Neo4j round-trips on busy channels.
+// These live for the lifetime of a warm serverless instance.
+// ---------------------------------------------------------------------------
+
+const nameCache = new Map<string, string>();
+const scheduledUsers = new Set<string>();
+const topicsCache = new Map<string, { topics: string[]; at: number }>();
+const TOPICS_TTL_MS = 60_000;
+
+/** Resolve a user's display name, caching it to avoid repeat users.info calls. */
+async function resolveUserName(
+  client: WebClient,
+  userId: string,
+): Promise<string> {
+  const cached = nameCache.get(userId);
+  if (cached) return cached;
+  let name = "Unknown";
+  try {
+    const info = await client.users.info({ user: userId });
+    name = info.user?.real_name || info.user?.name || "Unknown";
+  } catch {
+    // fall through with fallback
+  }
+  if (name !== "Unknown") nameCache.set(userId, name);
+  return name;
+}
+
+/** Known topics per team, cached for a short window to save a read per message. */
+async function getCachedKnownTopics(teamId: string): Promise<string[]> {
+  const hit = topicsCache.get(teamId);
+  if (hit && Date.now() - hit.at < TOPICS_TTL_MS) return hit.topics;
+  const topics = await getKnownTopics(teamId).catch(() => hit?.topics ?? []);
+  topicsCache.set(teamId, { topics, at: Date.now() });
+  return topics;
+}
+
+/**
+ * Start the per-user end-of-day handoff workflow at most once. An in-process
+ * Set short-circuits the DB claim for users we've already handled in this
+ * instance, so most messages skip the write entirely.
+ */
+async function ensureHandoffScheduled(
+  userId: string,
+  userName: string,
+  teamId: string,
+): Promise<void> {
+  const key = `${teamId}:${userId}`;
+  if (scheduledUsers.has(key)) return;
+  scheduledUsers.add(key); // optimistic — prevents in-instance double claims
+  try {
+    const claimed = await tryClaimHandoffSchedule(userId, userName, teamId);
+    if (claimed) {
+      await start(endOfDayHandoffWorkflow, [
+        { personId: userId, personName: userName, teamId },
+      ]);
+      console.log(`[Blueprint] scheduled end-of-day handoff for ${userName}`);
+    }
+  } catch (err) {
+    scheduledUsers.delete(key); // allow a retry on the next message
+    throw err;
+  }
+}
+
+/**
+ * PLAN — resume the plan workflow's modification hook when the user replies in a
+ * plan thread that's awaiting an adjustment/reassignment. Returns true if it
+ * consumed the message.
+ */
+async function routePlanModReply(
+  threadTs: string,
+  text: string,
+  teamId: string,
+): Promise<boolean> {
+  const plan = await getPlanByThread(threadTs, teamId);
+  if (!plan || !plan.awaitingMod) return false;
+  await planModHook.resume(`${threadTs}:mod`, { text });
+  return true;
+}
+
+const COMPLETION_HINT =
+  /\b(merged|shipped|deployed|done|complete|completed|pr (is )?up|ready for review|finished|wrapped up)\b/i;
+
+// Language that suggests a technical/architectural proposal worth a drift check.
+const PROPOSAL_HINT =
+  /\b(use|using|adopt|switch(ing)? to|migrat(e|ing) to|mov(e|ing) to|go(ing)? with|instead of|replace|drop|swap|prefer|let'?s use|we should use|pick|choose|choosing)\b/i;
+
+/**
+ * PLAN — watch for phase-completion signals in a channel with an active plan.
+ * A cheap regex pre-filter gates the model confirmation to bound cost.
+ */
+async function detectPlanCompletion(
+  client: WebClient,
+  text: string,
+  channel: string,
+  teamId: string,
+): Promise<void> {
+  if (!COMPLETION_HINT.test(text)) return;
+
+  // Cached (incl. negative) so common words like "done" don't trigger a DB read
+  // on every message in channels that have no active plan.
+  const plan = await getCachedActivePlan(channel, teamId);
+  if (!plan) return;
+
+  let phases: Array<{ index: number; title: string }>;
+  try {
+    phases = JSON.parse(plan.phasesJson);
+  } catch {
     return;
   }
+  if (!Array.isArray(phases) || phases.length === 0) return;
 
-  // Always record topic discussion — this builds the expertise graph over time
-  await recordDiscussion(userId, userName, classified.topic, teamId);
+  const phaseList = phases.map((p) => `${p.index}: ${p.title}`).join("\n");
+  const result = await generateJson<{ completed: boolean; phaseIndex: number }>(
+    `A plan has these phases:
+${phaseList}
 
-  // Store structured data based on classification
-  if (classified.type === "decision") {
-    await storeDecision({
-      personId: userId,
-      personName: userName,
-      topic: classified.topic,
-      summary: classified.summary,
-      channel,
-      threadTs,
-      teamId,
-    });
-    console.log(`[Blueprint] Decision stored — topic: ${classified.topic}`);
-  } else if (classified.type === "blocker") {
-    await storeBlocker({
-      personId: userId,
-      personName: userName,
-      topic: classified.topic,
-      summary: classified.summary,
-      channel,
-      threadTs,
-      teamId,
-    });
-    console.log(`[Blueprint] Blocker stored — topic: ${classified.topic}`);
-  }
+A teammate posted: "${text.replace(/"/g, '\\"')}"
+
+Does this message signal that one of the phases above is DONE/completed?
+Return ONLY JSON: { "completed": true|false, "phaseIndex": <the phase index number, or -1> }.
+No markdown, no code fences.`,
+    { completed: false, phaseIndex: -1 },
+    "plan-complete",
+  );
+
+  if (!result.completed || result.phaseIndex < 0) return;
+  if (plan.completedPhases.includes(result.phaseIndex)) return;
+
+  await markPhaseComplete(plan.id, teamId, result.phaseIndex);
+  activePlanCache.delete(channel); // state changed — force a fresh read next time
+  const phase = phases.find((p) => p.index === result.phaseIndex);
+  await client.chat.postMessage({
+    channel,
+    thread_ts: plan.threadTs,
+    text: `✅ Marked *Phase ${result.phaseIndex + 1}${phase ? ` (${phase.title})` : ""}* complete. Nice work!`,
+  });
+}
+
+const activePlanCache = new Map<
+  string,
+  { plan: PlanRecord | null; at: number }
+>();
+const ACTIVE_PLAN_TTL_MS = 30_000;
+
+/** Active plan for a channel, cached briefly (negatives included) to save reads. */
+async function getCachedActivePlan(
+  channel: string,
+  teamId: string,
+): Promise<PlanRecord | null> {
+  const hit = activePlanCache.get(channel);
+  if (hit && Date.now() - hit.at < ACTIVE_PLAN_TTL_MS) return hit.plan;
+  const plan = await getActivePlanForChannel(channel, teamId).catch(
+    () => hit?.plan ?? null,
+  );
+  activePlanCache.set(channel, { plan, at: Date.now() });
+  return plan;
+}
+
+/**
+ * FEATURE 2 — extract any technical proposal from a message, compare it against
+ * prior decisions, and post a thread-reply warning when it genuinely
+ * contradicts one (confidence > 0.75).
+ */
+async function runDriftCheck(
+  client: WebClient,
+  text: string,
+  channel: string,
+  threadTs: string,
+  teamId: string,
+): Promise<void> {
+  // Cheap gate: only messages that sound like a technical proposal are worth a
+  // model call. This keeps drift off the hot path for ordinary chatter.
+  if (!PROPOSAL_HINT.test(text)) return;
+
+  const proposal = await extractProposal(text);
+  if (!proposal.isProposal || proposal.keywords.length === 0) return;
+
+  const decisions = await getDecisionsAboutTopic(proposal.keywords, teamId);
+  if (decisions.length === 0) return;
+
+  const verdict = await detectContradiction(proposal.approach, decisions);
+  if (!verdict.contradiction || verdict.confidence <= 0.75) return;
+
+  const past = decisions[verdict.decisionIndex] ?? decisions[0];
+  await client.chat.postMessage({
+    channel,
+    thread_ts: threadTs,
+    blocks: driftBlocks({
+      pastSummary: past.summary,
+      pastDate: past.date,
+      value: {
+        oldDecisionId: past.id,
+        topic: past.topic,
+        approach: proposal.approach,
+        sourceChannel: past.channel,
+        sourceThreadTs: past.threadTs,
+      },
+    }),
+    text: "⚠️ Heads up — this may contradict a past decision.",
+  });
 }
