@@ -87,13 +87,24 @@ export async function messageClassifier({
   // blocks classification; awaited at the very end so the serverless function
   // doesn't freeze before the drift reply is posted. (Internally gated by a
   // cheap regex so most messages never hit the model.)
-  const driftPromise = runDriftCheck(
-    client,
-    event.text,
-    channel,
-    threadTs,
-    teamId,
-  ).catch((err) => console.error("[drift] check failed:", err));
+  //
+  // Priority rule: the Plan-Execute-Verify agent (app_mention) outranks drift.
+  // A bot @mention with build-intent language is (or will be) handled by the
+  // plan workflow, so we skip drift on that same message to avoid both firing.
+  const botUserId = context.botUserId;
+  const isPlanRequest =
+    !!botUserId &&
+    event.text.includes(`<@${botUserId}>`) &&
+    BUILD_INTENT.test(event.text.replace(/<@[^>]+>/g, ""));
+
+  const driftPromise = isPlanRequest
+    ? Promise.resolve()
+    : runDriftCheck(client, event.text, channel, threadTs, teamId).catch(
+        (err) => console.error("[drift] check failed:", err),
+      );
+  if (isPlanRequest) {
+    console.log("[Blueprint] plan request — skipping drift on this message");
+  }
 
   // FEATURE 1 — provision this user exactly once: cache their timezone (for
   // handoffs/relay) and start their daily end-of-day handoff workflow. Runs
@@ -181,18 +192,26 @@ export async function messageClassifier({
       );
       console.log(`[Blueprint] Relay armed — topic: ${topic}`);
     } else if (classified.type === "feature_request") {
-      // FEATURE 3 — Context Gap Detector.
-      writes.push(
-        handleFeatureRequest({
-          client,
-          text: event.text,
-          channel,
-          threadTs,
-          teamId,
-          topic,
-        }),
-      );
-      console.log(`[Blueprint] Gap check run — topic: ${topic}`);
+      // FEATURE 3 — Context Gap Detector. Skipped when the Plan-Execute-Verify
+      // agent already owns this message (a build-intent bot mention) so the two
+      // don't both respond to the same request.
+      if (isPlanRequest) {
+        console.log(
+          "[Blueprint] plan request — skipping gap check on this message",
+        );
+      } else {
+        writes.push(
+          handleFeatureRequest({
+            client,
+            text: event.text,
+            channel,
+            threadTs,
+            teamId,
+            topic,
+          }),
+        );
+        console.log(`[Blueprint] Gap check run — topic: ${topic}`);
+      }
     }
 
     await Promise.all(writes);

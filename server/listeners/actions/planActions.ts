@@ -5,6 +5,7 @@ import type {
   ButtonAction,
   SlackActionMiddlewareArgs,
 } from "@slack/bolt";
+import type { KnownBlock } from "@slack/web-api";
 import { planDecisionHook } from "~/lib/ai/workflows/hooks";
 import {
   PLAN_ADJUST_ACTION,
@@ -13,14 +14,61 @@ import {
   type PlanButtonValue,
 } from "~/lib/planner";
 
+/** A resolved/consumed hook throws this — a stale or duplicate button click. */
+function isHookNotFound(err: unknown): boolean {
+  const name = (err as { name?: string })?.name;
+  const msg = err instanceof Error ? err.message : String(err);
+  return name === "HookNotFoundError" || /hook not found/i.test(msg);
+}
+
+const STATUS_LABEL: Record<"approve" | "adjust" | "reassign", string> = {
+  approve: "▶️ Starting — plan locked.",
+  adjust: "✏️ Adjusting — reply in the thread with the change.",
+  reassign: "🔀 Reassigning — reply in the thread with the phase and owner.",
+};
+
+/**
+ * Replace the clicked plan message's buttons with a status line so it can't be
+ * clicked again (prevents resuming an already-consumed hook). Best-effort.
+ */
+async function retirePlanButtons(
+  client: AllMiddlewareArgs["client"],
+  channel: string | undefined,
+  ts: string | undefined,
+  blocks: unknown,
+  statusText: string,
+): Promise<void> {
+  if (!channel || !ts) return;
+  const kept = Array.isArray(blocks)
+    ? (blocks as KnownBlock[]).filter((b) => b.type !== "actions")
+    : [];
+  await client.chat
+    .update({
+      channel,
+      ts,
+      text: statusText,
+      blocks: [
+        ...kept,
+        { type: "context", elements: [{ type: "mrkdwn", text: statusText }] },
+      ],
+    })
+    .catch(() => {
+      /* message may be too old to edit — non-fatal */
+    });
+}
+
 /**
  * Resumes the plan workflow's decision hook when the user clicks one of the
  * three plan buttons. Adjust/Reassign then wait for a freeform thread reply,
  * which the message listener routes back into the workflow's modification hook.
+ * The clicked message's buttons are retired on click so the same decision can't
+ * be submitted twice (which would resume an already-consumed hook).
  */
 export const planDecisionCallback = async ({
   ack,
   action,
+  body,
+  client,
   logger,
 }: AllMiddlewareArgs & SlackActionMiddlewareArgs<BlockAction>) => {
   await ack();
@@ -42,9 +90,35 @@ export const planDecisionCallback = async ({
   const decision = map[button.action_id];
   if (!decision) return;
 
+  const channel = body.channel?.id;
+  const ts = body.message?.ts;
+  const blocks = body.message?.blocks;
+
   try {
     await planDecisionHook.resume(value.threadTs, { action: decision });
+    await retirePlanButtons(
+      client,
+      channel,
+      ts,
+      blocks,
+      STATUS_LABEL[decision],
+    );
   } catch (err) {
+    if (isHookNotFound(err)) {
+      // The plan step was already actioned (e.g. this is a stale message or a
+      // double click). Retire the buttons and move on quietly — not an error.
+      logger.info(
+        "[plan] decision hook already resolved; ignoring stale click",
+      );
+      await retirePlanButtons(
+        client,
+        channel,
+        ts,
+        blocks,
+        "✅ This plan step was already handled.",
+      );
+      return;
+    }
     logger.error("[plan] failed to resume decision hook:", err);
   }
 };

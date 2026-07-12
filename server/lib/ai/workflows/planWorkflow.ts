@@ -15,10 +15,10 @@ import {
 } from "~/lib/planner";
 
 /**
- * 48-hour verify window. Lower this temporarily (e.g. "2 minutes") to demo the
- * autonomous follow-up ping.
+ * Verify window before the autonomous follow-up. DEMO: "1 minute". Restore to
+ * "48 hours" for production.
  */
-export const PLAN_VERIFY_DELAY = "48 hours";
+export const PLAN_VERIFY_DELAY = "1 minute";
 
 export interface PlanWorkflowInput {
   channel: string;
@@ -107,8 +107,11 @@ export async function planWorkflow(input: PlanWorkflowInput) {
 async function gatherAndPlan(input: PlanWorkflowInput): Promise<GatherResult> {
   "use step";
   const { createSlackClient } = await import("~/lib/slack/client");
-  const { getDecisionsAboutTopic, getExpertsByTopics, getOverlappingFeatureTitle } =
-    await import("~/lib/graph");
+  const {
+    getDecisionsAboutTopic,
+    getExpertsByTopics,
+    getOverlappingFeatureTitle,
+  } = await import("~/lib/graph");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
 
   // Thinking state.

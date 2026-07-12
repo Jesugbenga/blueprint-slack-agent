@@ -38,7 +38,10 @@ async function computeHandoffDelay(
   );
   const offset = tz?.tzOffset ?? 0;
   const endMin = tz?.workdayEnd ?? WORKDAY_END_MIN;
-  return msUntilLocalMinuteOfDay(offset, endMin);
+  const realDelay = msUntilLocalMinuteOfDay(offset, endMin);
+  // DEMO: cap the wait to 10 minutes so the handoff fires during demos.
+  // Restore to `return realDelay;` for production (fires at local 5:30pm).
+  return Math.min(realDelay, 10 * 60_000);
 }
 
 /** Build and post the handoff brief, tagging a compatible online teammate. */

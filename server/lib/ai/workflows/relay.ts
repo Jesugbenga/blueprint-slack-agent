@@ -26,7 +26,8 @@ interface ConfidenceResult {
  */
 export async function asyncRelayWorkflow(input: RelayWorkflowInput) {
   "use workflow";
-  await sleep("2 minutes");
+  // DEMO: 1 minute. Restore to "25 minutes" for production.
+  await sleep("1 minute");
   await runRelay(input);
 }
 
@@ -140,8 +141,14 @@ Return ONLY valid JSON. No markdown, no code fences.`,
     const im = await client.conversations.open({ users: expert.personId });
     const dmChannel = im.channel?.id;
     if (dmChannel) {
+      // DEMO: send within ~1 minute. Restore to just
+      // unixSecondsForNextLocalMinuteOfDay(tz.tzOffset, WORKDAY_START_MIN)
+      // for production (fires at the expert's local 9am).
       const postAt = tz
-        ? unixSecondsForNextLocalMinuteOfDay(tz.tzOffset, WORKDAY_START_MIN)
+        ? Math.min(
+            unixSecondsForNextLocalMinuteOfDay(tz.tzOffset, WORKDAY_START_MIN),
+            Math.floor(Date.now() / 1000) + 60,
+          )
         : Math.floor(Date.now() / 1000) + 60;
       await client.chat.scheduleMessage({
         channel: dmChannel,
