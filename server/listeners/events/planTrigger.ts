@@ -8,8 +8,9 @@ type AppMentionArgs = SlackEventMiddlewareArgs<"app_mention"> &
 
 // Cheap pre-filter: only messages with build-intent language are worth a model
 // call. Everything else (greetings, questions, lookups) skips straight to the
-// agent, keeping the common @mention path fast.
-const BUILD_INTENT =
+// agent, keeping the common @mention path fast. Exported so the message
+// classifier can give the plan agent priority over drift detection.
+export const BUILD_INTENT =
   /\b(build|create|design|implement|develop|prototype|mock ?up|break ?down|scope out|spin up|add support for|help us (build|ship|create|design))\b/i;
 
 /**

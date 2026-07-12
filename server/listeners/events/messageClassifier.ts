@@ -22,7 +22,9 @@ import {
   tryClaimHandoffSchedule,
 } from "../../lib/graph";
 import { driftBlocks } from "../../lib/slack/drift-blocks";
+import { resolvePersonTimezone } from "../../lib/timezone";
 import { handleFeatureRequest } from "./featureRequestHandler";
+import { BUILD_INTENT } from "./planTrigger";
 
 type MessageArgs = SlackEventMiddlewareArgs<"message"> & AllMiddlewareArgs;
 
@@ -93,12 +95,16 @@ export async function messageClassifier({
     teamId,
   ).catch((err) => console.error("[drift] check failed:", err));
 
-  // FEATURE 1 — schedule this user's daily end-of-day handoff exactly once.
-  // Runs concurrently (not awaited before classification) and short-circuits on
-  // an in-process cache so it doesn't touch the DB on every message.
-  const handoffPromise = ensureHandoffScheduled(userId, userName, teamId).catch(
-    (err) => console.error("[handoff] failed to schedule:", err),
-  );
+  // FEATURE 1 — provision this user exactly once: cache their timezone (for
+  // handoffs/relay) and start their daily end-of-day handoff workflow. Runs
+  // concurrently and short-circuits via an in-process cache so most messages
+  // skip it entirely.
+  const provisionPromise = ensureUserProvisioned(
+    client,
+    userId,
+    userName,
+    teamId,
+  ).catch((err) => console.error("[provision] failed:", err));
 
   // Classify the message, reusing existing topic labels to avoid graph
   // fragmentation. Known topics are cached briefly to save a read per message.
@@ -198,7 +204,7 @@ export async function messageClassifier({
   );
 
   // Let the parallel background work settle before the function returns.
-  await Promise.all([driftPromise, handoffPromise]);
+  await Promise.all([driftPromise, provisionPromise]);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,19 +245,25 @@ async function getCachedKnownTopics(teamId: string): Promise<string[]> {
 }
 
 /**
- * Start the per-user end-of-day handoff workflow at most once. An in-process
- * Set short-circuits the DB claim for users we've already handled in this
- * instance, so most messages skip the write entirely.
+ * One-time per-user provisioning: cache their timezone on the Person node (for
+ * handoffs/relay) and start their daily end-of-day handoff workflow. An
+ * in-process Set short-circuits users already handled in this instance, so most
+ * messages skip all of it. resolvePersonTimezone itself checks the Neo4j cache
+ * first, so users.info is called at most once per user.
  */
-async function ensureHandoffScheduled(
+async function ensureUserProvisioned(
+  client: WebClient,
   userId: string,
   userName: string,
   teamId: string,
 ): Promise<void> {
   const key = `${teamId}:${userId}`;
   if (scheduledUsers.has(key)) return;
-  scheduledUsers.add(key); // optimistic — prevents in-instance double claims
+  scheduledUsers.add(key); // optimistic — prevents in-instance double work
   try {
+    // Cache timezone/workdayEnd on the Person node on first sighting.
+    await resolvePersonTimezone(client, userId, teamId, userName);
+
     const claimed = await tryClaimHandoffSchedule(userId, userName, teamId);
     if (claimed) {
       await start(endOfDayHandoffWorkflow, [
