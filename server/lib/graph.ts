@@ -1090,3 +1090,109 @@ export async function markPhaseComplete(
     "markPhaseComplete",
   );
 }
+
+// ---------------------------------------------------------------------------
+// Home dashboard queries — team-wide rollups for the App Home tab.
+// ---------------------------------------------------------------------------
+
+/** Most recent decisions across all topics (not superseded), newest first. */
+export async function getRecentDecisions(
+  teamId: string,
+  limit = 5,
+): Promise<DecisionRecord[]> {
+  const records = await runQuery(
+    `
+    MATCH (p:Person)-[:MADE]->(d:Decision {teamId: $teamId})
+    WHERE coalesce(d.superseded, false) = false
+    RETURN d.summary AS summary,
+           p.slackId AS personId,
+           p.name AS personName,
+           d.channel AS channel,
+           d.threadTs AS threadTs,
+           toString(d.date) AS date
+    ORDER BY d.date DESC
+    LIMIT $limit
+  `,
+    { teamId, limit: neo4j.int(limit) },
+    "getRecentDecisions",
+  );
+  return records as DecisionRecord[];
+}
+
+/** Unresolved blockers across all topics, newest first. */
+export async function getActiveBlockers(
+  teamId: string,
+  limit = 5,
+): Promise<BlockerRecord[]> {
+  const records = await runQuery(
+    `
+    MATCH (p:Person)-[:SENT]->(m:Message {type: "blocker", teamId: $teamId})
+    WHERE coalesce(m.resolved, false) = false
+    RETURN m.text AS summary,
+           p.slackId AS personId,
+           p.name AS personName,
+           m.channel AS channel,
+           m.ts AS threadTs,
+           toString(m.date) AS date
+    ORDER BY m.date DESC
+    LIMIT $limit
+  `,
+    { teamId, limit: neo4j.int(limit) },
+    "getActiveBlockers",
+  );
+  return records as BlockerRecord[];
+}
+
+/** Plans that are still in flight (pending approval or active), newest first. */
+export async function getActivePlansForTeam(
+  teamId: string,
+  limit = 5,
+): Promise<PlanRecord[]> {
+  const records = await runQuery(
+    `
+    MATCH (pl:Plan {teamId: $teamId})
+    WHERE pl.status IN ["active", "pending_approval"]
+    RETURN pl.id AS id,
+           pl.featureTitle AS featureTitle,
+           pl.channel AS channel,
+           pl.threadTs AS threadTs,
+           pl.status AS status,
+           coalesce(pl.awaitingMod, false) AS awaitingMod,
+           coalesce(pl.completedPhases, []) AS completedPhases,
+           pl.phasesJson AS phasesJson
+    ORDER BY pl.updatedAt DESC
+    LIMIT $limit
+  `,
+    { teamId, limit: neo4j.int(limit) },
+    "getActivePlansForTeam",
+  );
+  return records.map(toPlanRecord);
+}
+
+export interface TopicActivity {
+  topic: string;
+  activity: number;
+}
+
+/** Topics with the most decision/blocker activity since `sinceIso`, busiest first. */
+export async function getMostDiscussedTopics(
+  teamId: string,
+  sinceIso: string,
+  limit = 5,
+): Promise<TopicActivity[]> {
+  const records = await runQuery(
+    `
+    MATCH (n)-[:ABOUT|RAISED_CONCERN_ABOUT]->(t:Topic {teamId: $teamId})
+    WHERE n.date IS NOT NULL AND n.date >= datetime($sinceIso)
+    RETURN t.name AS topic, count(n) AS activity
+    ORDER BY activity DESC
+    LIMIT $limit
+  `,
+    { teamId, sinceIso, limit: neo4j.int(limit) },
+    "getMostDiscussedTopics",
+  );
+  return records.map((r) => ({
+    topic: r.topic as string,
+    activity: r.activity as number,
+  }));
+}
