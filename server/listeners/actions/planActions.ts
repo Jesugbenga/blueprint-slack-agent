@@ -10,6 +10,7 @@ import { planDecisionHook } from "~/lib/ai/workflows/hooks";
 import {
   PLAN_ADJUST_ACTION,
   PLAN_APPROVE_ACTION,
+  PLAN_CANCEL_ACTION,
   PLAN_REASSIGN_ACTION,
   type PlanButtonValue,
 } from "~/lib/planner";
@@ -21,10 +22,14 @@ function isHookNotFound(err: unknown): boolean {
   return name === "HookNotFoundError" || /hook not found/i.test(msg);
 }
 
-const STATUS_LABEL: Record<"approve" | "adjust" | "reassign", string> = {
+const STATUS_LABEL: Record<
+  "approve" | "adjust" | "reassign" | "cancel",
+  string
+> = {
   approve: "▶️ Starting — plan locked.",
   adjust: "✏️ Adjusting — reply in the thread with the change.",
   reassign: "🔀 Reassigning — reply in the thread with the phase and owner.",
+  cancel: "🛑 Plan cancelled.",
 };
 
 /**
@@ -82,10 +87,11 @@ export const planDecisionCallback = async ({
     return;
   }
 
-  const map: Record<string, "approve" | "adjust" | "reassign"> = {
+  const map: Record<string, "approve" | "adjust" | "reassign" | "cancel"> = {
     [PLAN_APPROVE_ACTION]: "approve",
     [PLAN_ADJUST_ACTION]: "adjust",
     [PLAN_REASSIGN_ACTION]: "reassign",
+    [PLAN_CANCEL_ACTION]: "cancel",
   };
   const decision = map[button.action_id];
   if (!decision) return;
@@ -96,13 +102,18 @@ export const planDecisionCallback = async ({
 
   try {
     await planDecisionHook.resume(value.threadTs, { action: decision });
-    await retirePlanButtons(
-      client,
-      channel,
-      ts,
-      blocks,
-      STATUS_LABEL[decision],
-    );
+    // Only a terminal decision retires the card's buttons so it can't be
+    // re-clicked. Adjust/Reassign loop back and post an updated plan, so their
+    // buttons stay live until the plan is approved or cancelled.
+    if (decision === "approve" || decision === "cancel") {
+      await retirePlanButtons(
+        client,
+        channel,
+        ts,
+        blocks,
+        STATUS_LABEL[decision],
+      );
+    }
   } catch (err) {
     if (isHookNotFound(err)) {
       // The plan step was already actioned (e.g. this is a stale message or a
@@ -123,9 +134,10 @@ export const planDecisionCallback = async ({
   }
 };
 
-/** Registers plan_approve / plan_adjust / plan_reassign on the app. */
+/** Registers plan_approve / plan_adjust / plan_reassign / plan_cancel on the app. */
 export const planActions = (app: App) => {
   app.action(PLAN_APPROVE_ACTION, planDecisionCallback);
   app.action(PLAN_ADJUST_ACTION, planDecisionCallback);
   app.action(PLAN_REASSIGN_ACTION, planDecisionCallback);
+  app.action(PLAN_CANCEL_ACTION, planDecisionCallback);
 };

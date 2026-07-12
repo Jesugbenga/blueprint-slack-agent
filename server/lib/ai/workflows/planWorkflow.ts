@@ -75,6 +75,16 @@ export async function planWorkflow(input: PlanWorkflowInput) {
       break;
     }
 
+    if (decision.action === "cancel") {
+      // Terminal: drop the plan and skip the verify follow-up entirely.
+      await markPlanCancelled(input);
+      await postThreadReply(
+        input,
+        "🛑 Plan cancelled — nothing was scheduled.",
+      );
+      return;
+    }
+
     // adjust / reassign — ask for the change, then wait for the thread reply.
     await postThreadReply(
       input,
@@ -232,6 +242,16 @@ async function setAwaiting(
   "use step";
   const { setPlanState } = await import("~/lib/graph");
   await setPlanState(input.threadTs, input.teamId, { awaitingMod });
+}
+
+/** Mark a plan cancelled (in a step so graph stays out of the orchestrator). */
+async function markPlanCancelled(input: PlanWorkflowInput): Promise<void> {
+  "use step";
+  const { setPlanState } = await import("~/lib/graph");
+  await setPlanState(input.threadTs, input.teamId, {
+    status: "cancelled",
+    awaitingMod: false,
+  });
 }
 
 async function applyModification(

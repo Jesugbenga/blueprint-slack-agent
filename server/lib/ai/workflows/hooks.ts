@@ -21,7 +21,7 @@ export const channelJoinApprovalHook = defineHook({
  */
 export const planDecisionHook = defineHook({
   schema: z.object({
-    action: z.enum(["approve", "adjust", "reassign"]),
+    action: z.enum(["approve", "adjust", "reassign", "cancel"]),
   }),
 });
 

@@ -52,6 +52,7 @@ export interface PlanExpert {
 export const PLAN_APPROVE_ACTION = "plan_approve";
 export const PLAN_ADJUST_ACTION = "plan_adjust";
 export const PLAN_REASSIGN_ACTION = "plan_reassign";
+export const PLAN_CANCEL_ACTION = "plan_cancel";
 
 /** Small payload carried on the plan buttons. */
 export interface PlanButtonValue {
@@ -324,6 +325,13 @@ export function planActionBlocks(threadTs: string): KnownBlock {
         type: "button",
         text: { type: "plain_text", text: "Reassign a phase", emoji: true },
         action_id: PLAN_REASSIGN_ACTION,
+        value,
+      },
+      {
+        type: "button",
+        text: { type: "plain_text", text: "Cancel", emoji: true },
+        style: "danger",
+        action_id: PLAN_CANCEL_ACTION,
         value,
       },
     ],

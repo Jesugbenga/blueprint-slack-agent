@@ -751,7 +751,7 @@ export interface PlanRecord {
   featureTitle: string;
   channel: string;
   threadTs: string;
-  status: "pending_approval" | "active" | "complete";
+  status: "pending_approval" | "active" | "complete" | "cancelled";
   awaitingMod: boolean;
   completedPhases: number[];
   /** JSON-encoded full PlanPhase[] for faithful reconstruction. */
@@ -920,7 +920,7 @@ export async function setPlanState(
   threadTs: string,
   teamId: string,
   patch: {
-    status?: "pending_approval" | "active" | "complete";
+    status?: "pending_approval" | "active" | "complete" | "cancelled";
     awaitingMod?: boolean;
   },
 ) {
