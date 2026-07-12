@@ -26,7 +26,7 @@ interface ConfidenceResult {
  */
 export async function asyncRelayWorkflow(input: RelayWorkflowInput) {
   "use workflow";
-  await sleep("25 minutes");
+  await sleep("2 minutes");
   await runRelay(input);
 }
 
