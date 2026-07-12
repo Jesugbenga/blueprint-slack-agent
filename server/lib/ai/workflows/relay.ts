@@ -1,18 +1,4 @@
 import { sleep } from "workflow";
-import { generateJson } from "~/lib/ai/json";
-import {
-  type DecisionRecord,
-  markQuestionAnswered,
-  queryDecisions,
-  recordRelay,
-  whoKnows,
-} from "~/lib/graph";
-import { slackPermalink } from "~/lib/slack/utils";
-import {
-  resolvePersonTimezone,
-  unixSecondsForNextLocalMinuteOfDay,
-  WORKDAY_START_MIN,
-} from "~/lib/timezone";
 
 export interface RelayWorkflowInput {
   questionId: string;
@@ -45,68 +31,29 @@ export async function asyncRelayWorkflow(input: RelayWorkflowInput) {
 }
 
 async function runRelay(input: RelayWorkflowInput): Promise<void> {
-  // Someone may have already replied — don't relay a resolved question.
-  if (await threadHasHumanReply(input)) {
-    await markQuestionAnswered(input.questionId, input.teamId, 0).catch(
-      () => {},
-    );
-    return;
-  }
-
-  const decisions = await queryDecisions(input.topic, input.teamId).catch(
-    () => [] as DecisionRecord[],
-  );
-
-  const scored = await scoreConfidence(input, decisions);
-
-  if (scored.confidence > 0.7 && scored.answer.trim()) {
-    const source = decisions[scored.sourceIndex];
-    const link =
-      source && slackPermalink(source.channel, source.threadTs)
-        ? ` (source: <${slackPermalink(source.channel, source.threadTs)}|prior decision>)`
-        : "";
-    await postThreadMessage(input, `${scored.answer}${link}`);
-    await markQuestionAnswered(
-      input.questionId,
-      input.teamId,
-      scored.confidence,
-    );
-    return;
-  }
-
-  // Low confidence — hand off to the best-qualified person for their 9am.
-  await relayToExpert(input, scored.confidence);
-}
-
-/** Post a reply into the question's thread. */
-async function postThreadMessage(
-  input: RelayWorkflowInput,
-  text: string,
-): Promise<void> {
   "use step";
   const { createSlackClient } = await import("~/lib/slack/client");
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
-  await client.chat.postMessage({
-    channel: input.channel,
-    thread_ts: input.threadTs,
-    text,
-  });
-}
+  const { markQuestionAnswered, queryDecisions, recordRelay, whoKnows } =
+    await import("~/lib/graph");
+  const { generateJson } = await import("~/lib/ai/json");
+  const { slackPermalink } = await import("~/lib/slack/utils");
+  const {
+    resolvePersonTimezone,
+    unixSecondsForNextLocalMinuteOfDay,
+    WORKDAY_START_MIN,
+  } = await import("~/lib/timezone");
 
-/** True if a non-bot user other than the asker has replied in the thread. */
-async function threadHasHumanReply(
-  input: RelayWorkflowInput,
-): Promise<boolean> {
-  "use step";
-  const { createSlackClient } = await import("~/lib/slack/client");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+
+  // 1. Someone may have already replied — don't relay a resolved question.
+  let humanReplied = false;
   try {
     const res = await client.conversations.replies({
       channel: input.channel,
       ts: input.threadTs,
       limit: 30,
     });
-    return (res.messages ?? []).some(
+    humanReplied = (res.messages ?? []).some(
       (m) =>
         !m.bot_id &&
         m.user &&
@@ -114,20 +61,24 @@ async function threadHasHumanReply(
         m.ts !== input.threadTs,
     );
   } catch {
-    return false;
+    // treat as unanswered
   }
-}
+  if (humanReplied) {
+    await markQuestionAnswered(input.questionId, input.teamId, 0).catch(
+      () => {},
+    );
+    return;
+  }
 
-async function scoreConfidence(
-  input: RelayWorkflowInput,
-  decisions: DecisionRecord[],
-): Promise<ConfidenceResult> {
+  // 2. Score how confidently we can answer from stored context.
+  const decisions = await queryDecisions(input.topic, input.teamId).catch(
+    () => [],
+  );
   const context =
     decisions.length > 0
       ? decisions.map((d, i) => `[${i}] ${d.summary}`).join("\n")
       : "(no related decisions found)";
-
-  return generateJson<ConfidenceResult>(
+  const scored = await generateJson<ConfidenceResult>(
     `You are Blueprint. An engineer asked a question. Using ONLY the team's stored context below, decide how confidently you can answer it.
 
 Question: "${input.text.replace(/"/g, '\\"')}"
@@ -144,19 +95,30 @@ Return ONLY valid JSON. No markdown, no code fences.`,
     { confidence: 0, answer: "", sourceIndex: -1 },
     "relay-confidence",
   );
-}
 
-async function relayToExpert(
-  input: RelayWorkflowInput,
-  confidence: number,
-): Promise<void> {
-  "use step";
-  const { createSlackClient } = await import("~/lib/slack/client");
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  if (scored.confidence > 0.7 && scored.answer.trim()) {
+    const source = decisions[scored.sourceIndex];
+    const permalink = source
+      ? slackPermalink(source.channel, source.threadTs)
+      : null;
+    const link = permalink ? ` (source: <${permalink}|prior decision>)` : "";
+    await client.chat.postMessage({
+      channel: input.channel,
+      thread_ts: input.threadTs,
+      text: `${scored.answer}${link}`,
+    });
+    await markQuestionAnswered(
+      input.questionId,
+      input.teamId,
+      scored.confidence,
+    );
+    return;
+  }
+
+  // 3. Low confidence — hand off to the best-qualified person for their 9am.
   const experts = await whoKnows(input.topic, input.teamId).catch(() => []);
   const expert = experts.find((e) => e.personId !== input.askerId);
   if (!expert) {
-    // Nobody to relay to — leave a note so the thread isn't silent.
     await client.chat.postMessage({
       channel: input.channel,
       thread_ts: input.threadTs,
@@ -205,6 +167,6 @@ async function relayToExpert(
     toPersonId: expert.personId,
     toPersonName: expert.personName,
     teamId: input.teamId,
-    confidence,
+    confidence: scored.confidence,
   });
 }

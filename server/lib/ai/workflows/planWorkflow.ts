@@ -1,15 +1,7 @@
 import { sleep } from "workflow";
 import { detectContradiction } from "~/lib/ai/drift";
 import { planDecisionHook, planModHook } from "~/lib/ai/workflows/hooks";
-import type { TopicDecisionRecord } from "~/lib/graph";
-import {
-  getDecisionsAboutTopic,
-  getExpertsByTopics,
-  getOverlappingFeatureTitle,
-  type StoredPlanPhase,
-  setPlanState,
-  storePlan,
-} from "~/lib/graph";
+import type { StoredPlanPhase, TopicDecisionRecord } from "~/lib/graph";
 import {
   buildGraphSummary,
   extractComponents,
@@ -75,7 +67,7 @@ export async function planWorkflow(input: PlanWorkflowInput) {
 
     if (decision.action === "approve") {
       await persistPlan(input, planId, gathered, phases, "active");
-      await setPlanState(input.threadTs, input.teamId, { awaitingMod: false });
+      await setAwaiting(input, false);
       await postThreadReply(
         input,
         "🔒 Plan locked. I'll check in on progress.",
@@ -90,10 +82,10 @@ export async function planWorkflow(input: PlanWorkflowInput) {
         ? "✏️ What should change? Reply in this thread and I'll re-plan."
         : "🔀 Which phase, and who should own it? Reply in this thread.",
     );
-    await setPlanState(input.threadTs, input.teamId, { awaitingMod: true });
+    await setAwaiting(input, true);
 
     const mod = await planModHook.create({ token: `${input.threadTs}:mod` });
-    await setPlanState(input.threadTs, input.teamId, { awaitingMod: false });
+    await setAwaiting(input, false);
 
     const applied = await applyModification(gathered, phases, mod.text);
     phases = applied.phases;
@@ -115,6 +107,8 @@ export async function planWorkflow(input: PlanWorkflowInput) {
 async function gatherAndPlan(input: PlanWorkflowInput): Promise<GatherResult> {
   "use step";
   const { createSlackClient } = await import("~/lib/slack/client");
+  const { getDecisionsAboutTopic, getExpertsByTopics, getOverlappingFeatureTitle } =
+    await import("~/lib/graph");
   const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
 
   // Thinking state.
@@ -203,6 +197,8 @@ async function persistPlan(
   phases: PlanPhase[],
   status: "pending_approval" | "active" | "complete",
 ): Promise<void> {
+  "use step";
+  const { storePlan } = await import("~/lib/graph");
   const stored: StoredPlanPhase[] = phases.map((p) => ({
     index: p.index,
     title: p.title,
@@ -225,11 +221,22 @@ async function persistPlan(
   });
 }
 
+/** Flip the plan's awaiting-modification flag (in a step so graph stays out of the orchestrator). */
+async function setAwaiting(
+  input: PlanWorkflowInput,
+  awaitingMod: boolean,
+): Promise<void> {
+  "use step";
+  const { setPlanState } = await import("~/lib/graph");
+  await setPlanState(input.threadTs, input.teamId, { awaitingMod });
+}
+
 async function applyModification(
   gathered: GatherResult,
   phases: PlanPhase[],
   modText: string,
 ): Promise<{ phases: PlanPhase[]; warning?: string }> {
+  "use step";
   const updated = await parsePlanModification(
     modText,
     phases,
