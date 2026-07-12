@@ -215,10 +215,19 @@ export const blueprintCommandCallback = async ({
 
   runBlueprintCommand(command.text ?? "", ctx).catch(async (error) => {
     logger.error("Blueprint command failed:", error);
+    const detail = error instanceof Error ? error.message : String(error);
+    // Surface the real cause to the invoking user (ephemeral — only they see it).
+    const looksLikeDb =
+      /neo4j|ServiceUnavailable|SessionExpired|authentication|unauthorized|Pool|ECONNRESET|ETIMEDOUT|connection/i.test(
+        detail,
+      );
+    const hint = looksLikeDb
+      ? "\n\nThis looks like a *knowledge-graph (Neo4j) connection* problem. Check the `NEO4J_*` environment variables on the server match the running instance, then redeploy."
+      : "";
     try {
       await respond({
         response_type: "ephemeral",
-        text: "Sorry, something went wrong handling that command.",
+        text: `⚠️ Couldn't handle that command.\n\`\`\`${detail.slice(0, 400)}\`\`\`${hint}`,
       });
     } catch (respondError) {
       logger.error("Also failed to send error response:", respondError);
