@@ -101,7 +101,7 @@ export const planDecisionCallback = async ({
   const blocks = body.message?.blocks;
 
   try {
-    await planDecisionHook.resume(value.threadTs, { action: decision });
+    await planDecisionHook.resume(value.planId, { action: decision });
     // Only a terminal decision retires the card's buttons so it can't be
     // re-clicked. Adjust/Reassign loop back and post an updated plan, so their
     // buttons stay live until the plan is approved or cancelled.

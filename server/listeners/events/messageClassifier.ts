@@ -308,7 +308,8 @@ async function routePlanModReply(
 ): Promise<boolean> {
   const plan = await getPlanByThread(threadTs, teamId);
   if (!plan || !plan.awaitingMod) return false;
-  await planModHook.resume(`${threadTs}:mod`, { text });
+  // The mod hook token is keyed to the plan's id (unique per workflow run).
+  await planModHook.resume(`${plan.id}:mod`, { text });
   return true;
 }
 

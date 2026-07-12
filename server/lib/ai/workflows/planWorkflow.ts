@@ -57,13 +57,14 @@ export async function planWorkflow(input: PlanWorkflowInput) {
   for (;;) {
     await postPlanMessage(
       input,
+      planId,
       phases,
       gathered.featureTitle,
       gathered.graphSummary,
       warning,
     );
 
-    const decision = await planDecisionHook.create({ token: input.threadTs });
+    const decision = await planDecisionHook.create({ token: planId });
 
     if (decision.action === "approve") {
       await persistPlan(input, planId, gathered, phases, "active");
@@ -94,7 +95,7 @@ export async function planWorkflow(input: PlanWorkflowInput) {
     );
     await setAwaiting(input, true);
 
-    const mod = await planModHook.create({ token: `${input.threadTs}:mod` });
+    const mod = await planModHook.create({ token: `${planId}:mod` });
     await setAwaiting(input, false);
 
     const applied = await applyModification(gathered, phases, mod.text);
@@ -170,6 +171,7 @@ async function gatherAndPlan(input: PlanWorkflowInput): Promise<GatherResult> {
 
 async function postPlanMessage(
   input: PlanWorkflowInput,
+  planId: string,
   phases: PlanPhase[],
   featureTitle: string,
   graphSummary: string,
@@ -183,7 +185,7 @@ async function postPlanMessage(
     thread_ts: input.threadTs,
     blocks: [
       ...generatePlanBlocks(phases, featureTitle, graphSummary, warning),
-      planActionBlocks(input.threadTs),
+      planActionBlocks(planId),
     ],
     text: `Plan for ${featureTitle}`,
   });

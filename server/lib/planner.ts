@@ -54,9 +54,10 @@ export const PLAN_ADJUST_ACTION = "plan_adjust";
 export const PLAN_REASSIGN_ACTION = "plan_reassign";
 export const PLAN_CANCEL_ACTION = "plan_cancel";
 
-/** Small payload carried on the plan buttons. */
+/** Small payload carried on the plan buttons. Carries the per-run plan id,
+ * which is used as the decision-hook token (unique per workflow run). */
 export interface PlanButtonValue {
-  threadTs: string;
+  planId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,8 +304,8 @@ export function generatePlanBlocks(
 }
 
 /** The three approval/adjust/reassign buttons, carrying the plan's thread ts. */
-export function planActionBlocks(threadTs: string): KnownBlock {
-  const value = JSON.stringify({ threadTs } satisfies PlanButtonValue);
+export function planActionBlocks(planId: string): KnownBlock {
+  const value = JSON.stringify({ planId } satisfies PlanButtonValue);
   return {
     type: "actions",
     elements: [
