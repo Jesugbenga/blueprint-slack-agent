@@ -1,8 +1,67 @@
-# Slack Agent Template
+# 📐 Blueprint — the continuous cloud PM for Slack
 
 [![Deploy with Vercel](https://vercel.com/button)](<https://vercel.com/new/clone?demo-description=This%20is%20a%20Slack%20Agent%20template%20built%20with%20Bolt%20for%20JavaScript%20(TypeScript)%20and%20the%20Nitro%20server%20framework.&demo-image=%2F%2Fimages.ctfassets.net%2Fe5382hct74si%2FSs9t7RkKlPtProrbDhZFM%2F0d11b9095ecf84c87a68fbdef6f12ad1%2FFrame__1_.png&demo-title=Slack%20Agent%20Template&demo-url=https%3A%2F%2Fgithub.com%2Fvercel-partner-solutions%2Fslack-agent-template&env=SLACK_SIGNING_SECRET%2CSLACK_BOT_TOKEN&envDescription=These%20environment%20variables%20are%20required%20to%20deploy%20your%20Slack%20app%20to%20Vercel&envLink=https%3A%2F%2Fapi.slack.com%2Fapps&from=templates&project-name=Slack%20Agent%20Template&project-names=Comma%20separated%20list%20of%20project%20names%2Cto%20match%20the%20root-directories&repository-name=slack-agent-template&repository-url=https%3A%2F%2Fgithub.com%2Fvercel-partner-solutions%2Fslack-agent-template&root-directories=List%20of%20directory%20paths%20for%20the%20directories%20to%20clone%20into%20projects&skippable-integrations=1>)
 
 A Slack Agent template built with [Workflow DevKit](https://useworkflow.dev)'s `DurableAgent`, [AI SDK](https://ai-sdk.dev) tools, [Bolt for JavaScript](https://tools.slack.dev/bolt-js/) (TypeScript), and the [Nitro](https://nitro.build) server framework.
+
+---
+
+## Inspiration
+
+Every engineering team quietly leaks context. A decision gets made in a thread on Tuesday and forgotten by Friday. A PM drops a feature request with no owner, no scope, and no acceptance criteria. Someone in London is blocked overnight because the one person who understands the auth service is asleep in San Francisco. And two weeks later somebody reopens a debate the team already settled — because nobody remembered they'd settled it.
+
+We didn't want another dashboard that people have to remember to update. We wanted a teammate that just *remembers* — one that lives where the work already happens (Slack), listens to the conversation, and steps in exactly when context is about to be lost. That teammate is **Blueprint: a continuous cloud PM.**
+
+## What it does
+
+Blueprint turns everyday Slack conversation into a living **knowledge graph**, then acts on it. On top of that memory it runs four autonomous agents plus a live dashboard:
+
+- **🧠 Team memory** — classifies every channel message into a Neo4j graph of decisions, blockers, questions, topics, and who-knows-what. Ask `@Blueprint what did we decide about auth?` and it answers with sources.
+- **⚠️ Decision Drift Detector** — when someone proposes something that *contradicts* a past decision, Blueprint flags it in-thread with the original decision and buttons to record a new direction or keep the old one.
+- **📝 Context Gap Detector** — spots feature requests missing an owner, scope, acceptance criteria, or dependencies and asks for the gaps *before* engineering starts.
+- **🗂️ Plan → Execute → Verify agent** — `@Blueprint break down <feature>` produces a graph-grounded plan (phases + owners drawn from the expertise graph + constraints from past decisions), waits for human approval, then autonomously follows up on progress.
+- **🌙 Timezone Handoff + Async Relay** — hands off open work at the end of someone's local day, and if a question sits unanswered it either answers from memory or DMs the right expert at the start of *their* workday.
+- **📐 Interactive App Home dashboard** — recent decisions, active blockers, plan progress, and trending topics — where you can resolve a blocker or check off a plan phase with one click.
+
+## How we built it
+
+- **Slack** — built on the Vercel Slack Agent template ([Bolt](https://tools.slack.dev/bolt-js/) + [Nitro](https://nitro.build)), using **Slack's Assistant (AI) API** for streamed replies and typing status, Block Kit for the interactive dashboard and cards, and the **Real-Time Search API** for recall across the workspace.
+- **Durable agents** — [Workflow DevKit](https://useworkflow.dev) makes the long-running, multi-step features (planning, the 25-minute relay, end-of-day handoff) suspendable and reliable on serverless, with human-in-the-loop approval hooks.
+- **Multi-model AI** — an [AI SDK](https://ai-sdk.dev) + [Vercel AI Gateway](https://vercel.com/ai-gateway) rotation across Mistral, Groq, Gemini, and Cerebras, so the agent stays fast and within free-tier limits by switching models at runtime.
+- **Knowledge graph** — Neo4j AuraDB stores the team's memory as a graph (`Person`, `Topic`, `Decision`, `Question`, `Plan`, `Feature`), which is what makes cross-feature reasoning ("this touches auth — you chose OAuth2") possible.
+
+See the [Architecture](#architecture) diagram below for how it all fits together.
+
+## Challenges we ran into
+
+- **CommonJS in an ESM workflow runtime** — the Neo4j driver's internal `require("os")` crashed inside Workflow DevKit's ESM workflow bundle (`ReferenceError: require is not defined`). We fixed it by keeping all database access inside `"use step"` functions with dynamic imports, so the driver only ever loads in the Node step runtime.
+- **Durable hook collisions** — plan approval hooks were keyed to the Slack thread, so re-running a plan in the same thread threw "hook token already in use." We re-keyed hooks to a unique per-run plan id.
+- **Timezone caching that never ran** — timezone lookups were buried inside a workflow that sleeps until 5:30pm, so profiles were never populated. We moved caching to each user's first message.
+- **Cost and latency at message volume** — classifying, drift-checking, and detecting gaps on *every* message risked rate limits, so we added cheap regex pre-filters and in-process caches, and gave features a priority order so they don't all fire on the same message.
+- **Serverless + external state** — a Neo4j restart left the deployment with stale credentials, and durable workflows kept running old code after edits — both good reminders that serverless state lives outside the function.
+
+## Accomplishments that we're proud of
+
+- Four genuinely **autonomous** features — Blueprint initiates, waits, and follows up on its own, rather than only responding when spoken to.
+- A knowledge graph that **populates itself** from natural conversation — no forms, no manual logging.
+- Durable, **suspendable workflows** (a 48-hour verify window, a 25-minute relay) that survive serverless cold starts.
+- A polished, **interactive Home dashboard** where blockers and plan phases are actionable in one click.
+- **Multi-model resilience** — the agent keeps working even as individual model providers hit limits.
+
+## What we learned
+
+- Durable workflows are powerful but have real constraints — determinism on replay and careful bundling of native dependencies.
+- Slack delivers a single @mention as *two* events (`app_mention` **and** `message`), so agents need a clear priority order to avoid double-responding.
+- Modeling team knowledge as a graph unlocks reasoning that a flat log can't — "who knows this," "what contradicts this," "what informed this."
+- Gating model calls behind cheap heuristics is the difference between a demo and something you can run on a busy workspace.
+
+## What's next for Blueprint
+
+- **A real MCP server** exposing Blueprint's tools (query decisions, who-knows, search history, design) so other agents and IDEs can tap the team's memory — currently an extension point, not yet enabled.
+- **Semantic topic matching** (embeddings) so drift detection and recall aren't limited to exact topic labels.
+- **Proactive staleness detection** — surface plans and blockers that have gone quiet, not just track them.
+- **Deeper integrations** — link decisions and plans to GitHub PRs/issues and calendars.
+- **Production hardening** — restore real-world timers (5:30pm handoffs, 25-minute relay, 48-hour verify) and the daily handoff schedule.
 
 ## Features
 
@@ -12,6 +71,51 @@ A Slack Agent template built with [Workflow DevKit](https://useworkflow.dev)'s `
 - **[Slack Assistant](https://api.slack.com/docs/apps/ai)** — Integrates with Slack's Assistant API for threaded conversations with real-time streaming responses
 - **[Human-in-the-Loop](./server/lib/ai/workflows/hooks.ts)** — Built-in approval workflows that pause agent execution until a user approves sensitive actions like joining channels
 - **[Built-in Tools](./server/lib/ai/tools.ts)** — Pre-configured tools for reading channels, threads, joining channels (with approval), and searching
+
+## Architecture
+
+Blueprint is a "continuous cloud PM" agent built on the Vercel Slack Agent template. It classifies every channel message into a **Neo4j knowledge graph** and runs four autonomous agentic features — **Decision Drift Detection**, **Context Gap Detection**, a **Plan → Execute → Verify** planning agent, and a **Timezone Handoff + Async Relay** — surfaced through an interactive **App Home dashboard**.
+
+```mermaid
+flowchart TB
+  U["👥 Slack users<br/>messages · @mentions · /blueprint · Home tab"]
+
+  subgraph BP["Blueprint · runs on Vercel"]
+    APP["Slack app (Bolt)<br/>listens to messages, commands & button clicks"]
+    AGENT["AI agent<br/>multi-model via Vercel AI Gateway"]
+    WF["Durable workflows<br/>planning · async relay · handoff"]
+  end
+
+  DB[("🧠 Neo4j knowledge graph<br/>decisions · blockers · plans · people")]
+
+  SLACKAI["★ Slack AI (Assistant API)<br/>streamed replies + live typing status"]
+  SEARCH["★ Real-Time Search API<br/>finds messages across the workspace"]
+  MCP["MCP integration<br/>extension point — not enabled yet"]
+
+  U --> APP
+  APP --> SLACKAI
+  APP --> AGENT
+  APP --> WF
+  AGENT --> SEARCH
+  AGENT --> DB
+  WF --> DB
+  AGENT --> U
+  WF --> U
+  AGENT -. "future" .-> MCP
+
+  classDef hi fill:#eef2ff,stroke:#3333cc,stroke-width:2px;
+  classDef off stroke-dasharray:4 3,stroke:#999999,color:#888888;
+  class SLACKAI,SEARCH hi;
+  class MCP off;
+```
+
+**In plain terms:** Slack users talk to Blueprint (by message, `@mention`, `/blueprint`, or the Home tab). Blueprint's Slack app hands the request to an AI agent and, for anything long-running, to durable workflows. Everything the team decides, asks, or plans is remembered in a Neo4j knowledge graph, and replies stream back into Slack.
+
+### Where the three key technologies live
+
+- **★ Slack AI capabilities** — Slack's **Assistant API**: threaded assistant conversations, real-time streamed responses via `client.chatStream`, live typing/status via `assistant.threads.setStatus`, and suggested prompts. See [`server/listeners/assistant/`](./server/listeners/assistant) and [`server/listeners/events/app-mention.ts`](./server/listeners/events/app-mention.ts). Enabled by `assistant_view` in [`manifest.json`](./manifest.json).
+- **★ Real-Time Search API** — Slack's `search.messages` API (user token, `search:read` scope) lets Blueprint recall messages from channels it isn't a member of. It's exposed to the agent as the `searchHistory` tool. See [`server/lib/slack/search.ts`](./server/lib/slack/search.ts) and [`server/lib/ai/tools.ts`](./server/lib/ai/tools.ts).
+- **🔌 MCP server integration** — **Not currently enabled** (`is_mcp_enabled: false` in [`manifest.json`](./manifest.json)), shown above as a dashed extension point. Blueprint's capabilities sit behind the AI SDK tool layer in [`server/lib/ai/tools.ts`](./server/lib/ai/tools.ts), which is the natural surface to expose or consume over MCP — but no MCP server is wired up today.
 
 ## Prerequisites
 
