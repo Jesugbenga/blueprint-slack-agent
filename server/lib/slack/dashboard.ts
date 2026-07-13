@@ -218,8 +218,8 @@ function plansSection(plans: PlanRecord[]): KnownBlock[] {
         blocks.push(
           context(`✅  ~Phase ${p.index + 1}: ${truncate(p.title, 140)}~`),
         );
-      } else if (pl.status === "active") {
-        // Only approved (active) plans expose the "Mark done" control.
+      } else {
+        // Every incomplete phase gets a side button, like the blockers list.
         blocks.push({
           type: "section",
           text: {
@@ -236,15 +236,11 @@ function plansSection(plans: PlanRecord[]): KnownBlock[] {
             } satisfies CompletePhaseValue),
           },
         });
-      } else {
-        blocks.push(
-          context(`⬜  Phase ${p.index + 1}: ${truncate(p.title, 140)}`),
-        );
       }
     }
 
     // Once every phase is checked off, offer to close out the whole plan.
-    if (pl.status === "active" && total > 0 && completed === total) {
+    if (total > 0 && completed === total) {
       blocks.push({
         type: "actions",
         elements: [
