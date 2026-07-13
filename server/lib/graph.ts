@@ -940,6 +940,22 @@ export async function setPlanState(
   );
 }
 
+/** Set a plan's status by its id (used to close out a plan from the dashboard). */
+export async function setPlanStatus(
+  planId: string,
+  teamId: string,
+  status: "pending_approval" | "active" | "complete" | "cancelled",
+) {
+  await runQuery(
+    `
+    MATCH (pl:Plan {id: $planId, teamId: $teamId})
+    SET pl.status = $status, pl.updatedAt = datetime()
+  `,
+    { planId, teamId, status },
+    "setPlanStatus",
+  );
+}
+
 function toPlanRecord(row: Record<string, unknown>): PlanRecord {
   return {
     id: row.id as string,
@@ -1119,16 +1135,23 @@ export async function getRecentDecisions(
   return records as DecisionRecord[];
 }
 
+/** A blocker plus its stable node id for interactive resolution. */
+export interface ActiveBlocker extends BlockerRecord {
+  /** Stable node id, used to resolve the blocker straight from the dashboard. */
+  id: string;
+}
+
 /** Unresolved blockers across all topics, newest first. */
 export async function getActiveBlockers(
   teamId: string,
   limit = 5,
-): Promise<BlockerRecord[]> {
+): Promise<ActiveBlocker[]> {
   const records = await runQuery(
     `
     MATCH (p:Person)-[:SENT]->(m:Message {type: "blocker", teamId: $teamId})
     WHERE coalesce(m.resolved, false) = false
-    RETURN m.text AS summary,
+    RETURN elementId(m) AS id,
+           m.text AS summary,
            p.slackId AS personId,
            p.name AS personName,
            m.channel AS channel,
@@ -1140,7 +1163,7 @@ export async function getActiveBlockers(
     { teamId, limit: neo4j.int(limit) },
     "getActiveBlockers",
   );
-  return records as BlockerRecord[];
+  return records as ActiveBlocker[];
 }
 
 /** Plans that are still in flight (pending approval or active), newest first. */

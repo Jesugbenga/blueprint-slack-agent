@@ -269,9 +269,9 @@ export function generatePlanBlocks(
 
   blocks.push({ type: "divider" });
 
-  for (const phase of phases) {
+  phases.forEach((phase, idx) => {
     const lines = [
-      `*Phase ${phase.index + 1}: ${phase.title}*`,
+      `*Phase ${phase.index + 1} · ${phase.title}*`,
       phase.description,
     ];
 
@@ -293,11 +293,12 @@ export function generatePlanBlocks(
       );
     }
 
+    if (idx > 0) blocks.push({ type: "divider" });
     blocks.push({
       type: "section",
       text: { type: "mrkdwn", text: lines.join("\n") },
     });
-  }
+  });
 
   blocks.push({ type: "divider" });
   return blocks;

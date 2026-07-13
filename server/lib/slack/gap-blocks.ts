@@ -22,15 +22,25 @@ export function gapBlocks(opts: {
   draftId: string;
 }): KnownBlock[] {
   const { analysis, draftId } = opts;
+  const btnValue = JSON.stringify({ draftId } satisfies GapButtonValue);
 
   const blocks: KnownBlock[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: "📝 A few gaps before we build",
+        emoji: true,
+      },
+    },
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `📝 *Before engineering starts on "${truncate(analysis.title, 120)}", I noticed a few gaps:*`,
+        text: `Before engineering starts on *"${truncate(analysis.title, 120)}"*, some context is missing:`,
       },
     },
+    { type: "divider" },
   ];
 
   for (const gap of analysis.gaps) {
@@ -38,7 +48,7 @@ export function gapBlocks(opts: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `• *${gap.label}* — _${gap.why}_`,
+        text: `⬜  *${gap.label}*\n_${gap.why}_`,
       },
     });
   }
@@ -50,25 +60,26 @@ export function gapBlocks(opts: {
     });
   }
 
+  blocks.push({ type: "divider" });
   blocks.push({
     type: "actions",
     elements: [
       {
         type: "button",
-        text: { type: "plain_text", text: "Fill in the gaps", emoji: true },
+        text: { type: "plain_text", text: "✍️ Fill in the gaps", emoji: true },
         style: "primary",
         action_id: GAP_FILL_ACTION,
-        value: JSON.stringify({ draftId } satisfies GapButtonValue),
+        value: btnValue,
       },
       {
         type: "button",
         text: {
           type: "plain_text",
-          text: "Skip — this is exploratory",
+          text: "🧪 Skip — exploratory",
           emoji: true,
         },
         action_id: GAP_SKIP_ACTION,
-        value: JSON.stringify({ draftId } satisfies GapButtonValue),
+        value: btnValue,
       },
     ],
   });

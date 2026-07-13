@@ -13,12 +13,11 @@ export interface HandoffWorkflowInput {
  */
 export async function endOfDayHandoffWorkflow(input: HandoffWorkflowInput) {
   "use workflow";
-  // Runs indefinitely: sleep until the next local 5:30pm, post, repeat.
-  for (;;) {
-    const delayMs = await computeHandoffDelay(input);
-    await sleep(delayMs);
-    await runHandoff(input);
-  }
+  // DEMO: fire the handoff once, then stop. For production, wrap this in
+  // `for (;;) { ... }` so it re-queues each day at the user's local 5:30pm.
+  const delayMs = await computeHandoffDelay(input);
+  await sleep(delayMs);
+  await runHandoff(input);
 }
 
 /** How long until this user's next local workday-end. */
