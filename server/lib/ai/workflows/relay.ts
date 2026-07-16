@@ -33,7 +33,7 @@ export async function asyncRelayWorkflow(input: RelayWorkflowInput) {
 
 async function runRelay(input: RelayWorkflowInput): Promise<void> {
   "use step";
-  const { createSlackClient } = await import("~/lib/slack/client");
+  const { WebClient } = await import("@slack/web-api");
   const { markQuestionAnswered, queryDecisions, recordRelay, whoKnows } =
     await import("~/lib/graph");
   const { generateJson } = await import("~/lib/ai/json");
@@ -44,7 +44,7 @@ async function runRelay(input: RelayWorkflowInput): Promise<void> {
     WORKDAY_START_MIN,
   } = await import("~/lib/timezone");
 
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  const client = new WebClient(process.env.SLACK_BOT_TOKEN as string);
 
   // 1. Someone may have already replied — don't relay a resolved question.
   let humanReplied = false;

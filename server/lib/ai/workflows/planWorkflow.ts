@@ -117,13 +117,13 @@ export async function planWorkflow(input: PlanWorkflowInput) {
 
 async function gatherAndPlan(input: PlanWorkflowInput): Promise<GatherResult> {
   "use step";
-  const { createSlackClient } = await import("~/lib/slack/client");
+  const { WebClient } = await import("@slack/web-api");
   const {
     getDecisionsAboutTopic,
     getExpertsByTopics,
     getOverlappingFeatureTitle,
   } = await import("~/lib/graph");
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  const client = new WebClient(process.env.SLACK_BOT_TOKEN as string);
 
   // Thinking state.
   await client.chat.postMessage({
@@ -178,8 +178,8 @@ async function postPlanMessage(
   warning?: string,
 ): Promise<void> {
   "use step";
-  const { createSlackClient } = await import("~/lib/slack/client");
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  const { WebClient } = await import("@slack/web-api");
+  const client = new WebClient(process.env.SLACK_BOT_TOKEN as string);
   await client.chat.postMessage({
     channel: input.channel,
     thread_ts: input.threadTs,
@@ -196,8 +196,8 @@ async function postThreadReply(
   text: string,
 ): Promise<void> {
   "use step";
-  const { createSlackClient } = await import("~/lib/slack/client");
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  const { WebClient } = await import("@slack/web-api");
+  const client = new WebClient(process.env.SLACK_BOT_TOKEN as string);
   await client.chat.postMessage({
     channel: input.channel,
     thread_ts: input.threadTs,
@@ -301,8 +301,8 @@ async function runVerify(
   approvedAtSec: number,
 ): Promise<void> {
   "use step";
-  const { createSlackClient } = await import("~/lib/slack/client");
-  const client = createSlackClient(process.env.SLACK_BOT_TOKEN as string);
+  const { WebClient } = await import("@slack/web-api");
+  const client = new WebClient(process.env.SLACK_BOT_TOKEN as string);
 
   // Who has posted in the channel since approval?
   let activeUsers = new Set<string>();
