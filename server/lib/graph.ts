@@ -142,13 +142,23 @@ export async function queryDecisions(
   const records = await runQuery(
     `
     MATCH (p:Person)-[:MADE]->(d:Decision)-[:ABOUT]->(t:Topic {name: $topic, teamId: $teamId})
-    RETURN d.summary AS summary,
-           p.slackId AS personId,
-           p.name AS personName,
-           d.channel AS channel,
-           d.threadTs AS threadTs,
-           toString(d.date) AS date
+    WITH d, p
     ORDER BY d.date DESC
+    WITH d.summary AS summary,
+         head(collect({
+           personId: p.slackId,
+           personName: p.name,
+           channel: d.channel,
+           threadTs: d.threadTs,
+           date: toString(d.date)
+         })) AS rec
+    RETURN summary,
+           rec.personId AS personId,
+           rec.personName AS personName,
+           rec.channel AS channel,
+           rec.threadTs AS threadTs,
+           rec.date AS date
+    ORDER BY rec.date DESC
     LIMIT $limit
   `,
     { topic: normalizeTopic(topic), teamId, limit: neo4j.int(limit) },
@@ -165,13 +175,23 @@ export async function queryBlockers(
   const records = await runQuery(
     `
     MATCH (p:Person)-[:SENT]->(m:Message {type: "blocker"})-[:RAISED_CONCERN_ABOUT]->(t:Topic {name: $topic, teamId: $teamId})
-    RETURN m.text AS summary,
-           p.slackId AS personId,
-           p.name AS personName,
-           m.channel AS channel,
-           m.ts AS threadTs,
-           toString(m.date) AS date
+    WITH m, p
     ORDER BY m.date DESC
+    WITH m.text AS summary,
+         head(collect({
+           personId: p.slackId,
+           personName: p.name,
+           channel: m.channel,
+           threadTs: m.ts,
+           date: toString(m.date)
+         })) AS rec
+    RETURN summary,
+           rec.personId AS personId,
+           rec.personName AS personName,
+           rec.channel AS channel,
+           rec.threadTs AS threadTs,
+           rec.date AS date
+    ORDER BY rec.date DESC
     LIMIT $limit
   `,
     { topic: normalizeTopic(topic), teamId, limit: neo4j.int(limit) },
@@ -1120,13 +1140,23 @@ export async function getRecentDecisions(
     `
     MATCH (p:Person)-[:MADE]->(d:Decision {teamId: $teamId})
     WHERE coalesce(d.superseded, false) = false
-    RETURN d.summary AS summary,
-           p.slackId AS personId,
-           p.name AS personName,
-           d.channel AS channel,
-           d.threadTs AS threadTs,
-           toString(d.date) AS date
+    WITH d, p
     ORDER BY d.date DESC
+    WITH d.summary AS summary,
+         head(collect({
+           personId: p.slackId,
+           personName: p.name,
+           channel: d.channel,
+           threadTs: d.threadTs,
+           date: toString(d.date)
+         })) AS rec
+    RETURN summary,
+           rec.personId AS personId,
+           rec.personName AS personName,
+           rec.channel AS channel,
+           rec.threadTs AS threadTs,
+           rec.date AS date
+    ORDER BY rec.date DESC
     LIMIT $limit
   `,
     { teamId, limit: neo4j.int(limit) },
@@ -1150,14 +1180,25 @@ export async function getActiveBlockers(
     `
     MATCH (p:Person)-[:SENT]->(m:Message {type: "blocker", teamId: $teamId})
     WHERE coalesce(m.resolved, false) = false
-    RETURN elementId(m) AS id,
-           m.text AS summary,
-           p.slackId AS personId,
-           p.name AS personName,
-           m.channel AS channel,
-           m.ts AS threadTs,
-           toString(m.date) AS date
+    WITH m, p
     ORDER BY m.date DESC
+    WITH m.text AS summary,
+         head(collect({
+           id: elementId(m),
+           personId: p.slackId,
+           personName: p.name,
+           channel: m.channel,
+           threadTs: m.ts,
+           date: toString(m.date)
+         })) AS rec
+    RETURN rec.id AS id,
+           summary,
+           rec.personId AS personId,
+           rec.personName AS personName,
+           rec.channel AS channel,
+           rec.threadTs AS threadTs,
+           rec.date AS date
+    ORDER BY rec.date DESC
     LIMIT $limit
   `,
     { teamId, limit: neo4j.int(limit) },
